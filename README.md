@@ -166,13 +166,13 @@ end
 {ok, DB} = elmdb:db_open(Env, [create]),
 
 % Store and retrieve data
-ok = elmdb:put(DB, <<"user:123">>, <<"Alice">>),
-{ok, <<"Alice">>} = elmdb:get(DB, <<"user:123">>),
+ok = elmdb:put(DB, <<"user/123">>, <<"Alice">>),
+{ok, <<"Alice">>} = elmdb:get(DB, <<"user/123">>),
 
 % List keys with prefix
-ok = elmdb:put(DB, <<"user:123:name">>, <<"Alice">>),
-ok = elmdb:put(DB, <<"user:123:email">>, <<"alice@example.com">>),
-{ok, [<<"name">>, <<"email">>]} = elmdb:list(DB, <<"user:123:">>),
+ok = elmdb:put(DB, <<"user/123/name">>, <<"Alice">>),
+ok = elmdb:put(DB, <<"user/123/email">>, <<"alice@example.com">>),
+{ok, [<<"name">>, <<"email">>]} = elmdb:list(DB, <<"user/123/">>),
 
 % Clean up
 ok = elmdb:env_close(Env).
@@ -186,8 +186,8 @@ ok = elmdb:env_close(Env).
 {:ok, db} = :elmdb.db_open(env, [:create])
 
 # Store and retrieve
-:ok = :elmdb.put(db, "user:123", "Alice")
-{:ok, "Alice"} = :elmdb.get(db, "user:123")
+:ok = :elmdb.put(db, "user/123", "Alice")
+{:ok, "Alice"} = :elmdb.get(db, "user/123")
 
 # Hierarchical data
 :ok = :elmdb.put(db, "users/alice/profile/name", "Alice Smith")
@@ -249,6 +249,8 @@ Retrieves a value by key.
 #### `list(DB, KeyPrefix) -> {ok, [Child]} | not_found`
 
 Lists direct children of a key prefix. Useful for hierarchical data structures.
+
+**Note:** elmdb-rs uses `/` (forward slash) as the standard path separator for hierarchical keys. This enables efficient prefix-based operations and provides natural tree-like data organization.
 
 ## Examples
 
@@ -392,7 +394,7 @@ start() ->
 
 get(Section, Key) when is_atom(Section), is_atom(Key) ->
     DB = persistent_term:get({?MODULE, db}),
-    ConfigKey = iolist_to_binary([atom_to_binary(Section), ":", atom_to_binary(Key)]),
+    ConfigKey = iolist_to_binary([atom_to_binary(Section), "/", atom_to_binary(Key)]),
     case elmdb:get(DB, ConfigKey) of
         {ok, Value} -> {ok, binary_to_term(Value)};
         not_found -> {error, not_found}
@@ -400,12 +402,12 @@ get(Section, Key) when is_atom(Section), is_atom(Key) ->
 
 set(Section, Key, Value) when is_atom(Section), is_atom(Key) ->
     DB = persistent_term:get({?MODULE, db}),
-    ConfigKey = iolist_to_binary([atom_to_binary(Section), ":", atom_to_binary(Key)]),
+    ConfigKey = iolist_to_binary([atom_to_binary(Section), "/", atom_to_binary(Key)]),
     ok = elmdb:put(DB, ConfigKey, term_to_binary(Value)).
 
 list_section(Section) when is_atom(Section) ->
     DB = persistent_term:get({?MODULE, db}),
-    Prefix = iolist_to_binary([atom_to_binary(Section), ":"]),
+    Prefix = iolist_to_binary([atom_to_binary(Section), "/"]),
     elmdb:list(DB, Prefix).
 ```
 
@@ -426,8 +428,8 @@ start() ->
 create_session(UserId, SessionData) ->
     DB = persistent_term:get({?MODULE, db}),
     SessionId = generate_session_id(),
-    SessionKey = <<"session:", SessionId/binary>>,
-    UserKey = <<"user_session:", UserId/binary>>,
+    SessionKey = <<"sessions/", SessionId/binary>>,
+    UserKey = <<"user_sessions/", UserId/binary>>,
     
     % Store session data
     ok = elmdb:put(DB, SessionKey, term_to_binary(SessionData)),
@@ -439,7 +441,7 @@ create_session(UserId, SessionData) ->
 
 get_session(SessionId) ->
     DB = persistent_term:get({?MODULE, db}),
-    SessionKey = <<"session:", SessionId/binary>>,
+    SessionKey = <<"sessions/", SessionId/binary>>,
     case elmdb:get(DB, SessionKey) of
         {ok, Data} -> {ok, binary_to_term(Data)};
         not_found -> {error, session_not_found}
@@ -554,7 +556,7 @@ cleanup_test_db(Config) ->
 ### Optimization Tips
 
 1. **Use Binary Keys**: Binary keys are more efficient than strings
-2. **Design Hierarchical Keys**: Use `/` or `:` separators for logical grouping
+2. **Design Hierarchical Keys**: Use `/` separators for logical grouping (standard convention)
 3. **Choose Appropriate Map Size**: Set based on expected data size, can't be changed later
 4. **Use no_sync for Non-Critical Data**: Significant performance boost for caches
 5. **Batch Related Operations**: Group writes when possible for better performance
@@ -924,7 +926,7 @@ benchmark_my_data(_Config) ->
     % Time writes
     StartTime = erlang:system_time(microsecond),
     lists:foreach(fun(I) ->
-        Key = <<"myapp:user:", (integer_to_binary(I))/binary>>,
+        Key = <<"myapp/user/", (integer_to_binary(I))/binary>>,
         Value = term_to_binary(#{id => I, name => <<"User", (integer_to_binary(I))/binary>>}),
         ok = elmdb:put(DB, Key, Value)
     end, lists:seq(1, 10000)),

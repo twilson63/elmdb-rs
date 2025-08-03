@@ -222,7 +222,7 @@ put(DB, Key, Value) -> ok | {error, Type, Description}
   - Key to store (must be binary)
   - Keys are sorted lexicographically
   - Maximum size depends on LMDB configuration (typically 511 bytes)
-  - Example: `<<"user:123">>`
+  - Example: `<<"user/123">>`
 
 - `Value` :: `binary()`
   - Value to store (must be binary)
@@ -243,11 +243,11 @@ put(DB, Key, Value) -> ok | {error, Type, Description}
 
 ```erlang
 % Basic put operation
-ok = elmdb:put(DB, <<"user:123">>, <<"Alice">>).
+ok = elmdb:put(DB, <<"user/123">>, <<"Alice">>).
 
 % Store structured data (JSON)
 UserData = jiffy:encode(#{name => <<"Alice">>, age => 30}),
-ok = elmdb:put(DB, <<"user:123:profile">>, UserData).
+ok = elmdb:put(DB, <<"user/123/profile">>, UserData).
 
 % Hierarchical keys
 ok = elmdb:put(DB, <<"config/database/host">>, <<"localhost">>),
@@ -265,7 +265,7 @@ end.
 
 % Store binary data
 BinaryData = term_to_binary({user, 123, <<"Alice">>, [admin, user]}),
-ok = elmdb:put(DB, <<"user:123:data">>, BinaryData).
+ok = elmdb:put(DB, <<"user/123/data">>, BinaryData).
 ```
 
 ### get/2
@@ -297,10 +297,10 @@ get(DB, Key) -> {ok, Value} | not_found | {error, Type, Description}
 
 ```erlang
 % Basic get operation
-{ok, Value} = elmdb:get(DB, <<"user:123">>).
+{ok, Value} = elmdb:get(DB, <<"user/123">>).
 
 % Handle missing keys
-case elmdb:get(DB, <<"user:456">>) of
+case elmdb:get(DB, <<"user/456">>) of
     {ok, Value} ->
         io:format("Found: ~s~n", [Value]);
     not_found ->
@@ -310,7 +310,7 @@ case elmdb:get(DB, <<"user:456">>) of
 end.
 
 % Retrieve and decode JSON
-case elmdb:get(DB, <<"user:123:profile">>) of
+case elmdb:get(DB, <<"user/123/profile">>) of
     {ok, JsonBinary} ->
         UserProfile = jiffy:decode(JsonBinary, [return_maps]),
         io:format("User: ~p~n", [UserProfile]);
@@ -319,7 +319,7 @@ case elmdb:get(DB, <<"user:123:profile">>) of
 end.
 
 % Retrieve and decode Erlang terms
-case elmdb:get(DB, <<"user:123:data">>) of
+case elmdb:get(DB, <<"user/123/data">>) of
     {ok, BinaryData} ->
         {user, UserId, Name, Roles} = binary_to_term(BinaryData),
         io:format("User ~p: ~s with roles ~p~n", [UserId, Name, Roles]);
@@ -346,7 +346,7 @@ list(DB, KeyPrefix) -> {ok, [Child]} | not_found
 - `KeyPrefix` :: `binary()`
   - Key prefix to search for
   - Returns next path components after the prefix
-  - Should typically end with a separator (e.g., `/`, `:`, `.`)
+  - Should typically end with a separator (e.g., `/`)
 
 **Return Values:**
 
@@ -497,21 +497,31 @@ safe_multi_put(DB, KeyValuePairs) ->
 ### Key Design Guidelines
 
 1. **Use Binary Keys**: Always use binaries for keys, not strings or atoms
-2. **Hierarchical Structure**: Use separators like `/`, `:`, or `.` for hierarchy
+2. **Hierarchical Structure**: Use `/` separator for hierarchy
 3. **Lexicographic Ordering**: Design keys to sort naturally
 4. **Length Considerations**: Keep keys reasonably short (< 200 bytes recommended)
 
+**Path Separator Convention:**
+
+elmdb-rs uses `/` (forward slash) as the standard path separator for hierarchical keys. This convention:
+- Enables efficient prefix-based operations with the `list/2` function
+- Provides natural tree-like data organization
+- Maintains consistency across the codebase and examples
+- Is compatible with filesystem-like key naming patterns
+
+When using hierarchical keys, always use `/` as the separator for optimal performance and consistency with the `list/2` operation implementation.
+
 ```erlang
 % Good key designs
-<<"user:123">>
+<<"user/123">>
 <<"users/alice/profile/name">>
-<<"config.database.host">>
-<<"session:abc123:data">>
-<<"doc:2024:01:15:report.pdf">>
+<<"config/database/host">>
+<<"session/abc123/data">>
+<<"doc/2024/01/15/report.pdf">>
 
 % Avoid
 user_123                    % Atom, not binary
-"user:123"                  % String, not binary
+"user/123"                  % String, not binary
 <<1,2,3,4>>                % Opaque binary (hard to debug)
 ```
 

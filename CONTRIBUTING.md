@@ -319,7 +319,7 @@ run() ->
     StartTime = erlang:system_time(microsecond),
     
     lists:foreach(fun(I) ->
-        Key = <<"benchmark:key:", (integer_to_binary(I))/binary>>,
+        Key = <<"benchmark/key/", (integer_to_binary(I))/binary>>,
         Value = <<"value_", (integer_to_binary(I))/binary, "_data">>,
         ok = elmdb:put(DB, Key, Value)
     end, lists:seq(1, Records)),
@@ -334,7 +334,7 @@ run() ->
     ReadStartTime = erlang:system_time(microsecond),
     
     lists:foreach(fun(I) ->
-        Key = <<"benchmark:key:", (integer_to_binary(I))/binary>>,
+        Key = <<"benchmark/key/", (integer_to_binary(I))/binary>>,
         {ok, _Value} = elmdb:get(DB, Key)
     end, lists:seq(1, Records)),
     
@@ -408,7 +408,7 @@ erl +Meamin -pa _build/default/lib/elmdb/ebin
 -export([format_key/2, validate_options/1]).
 
 format_key(Prefix, Suffix) when is_binary(Prefix), is_binary(Suffix) ->
-    <<Prefix/binary, ":", Suffix/binary>>;
+    <<Prefix/binary, "/", Suffix/binary>>;
 format_key(Prefix, Suffix) ->
     error({badarg, {Prefix, Suffix}}).
 

@@ -1,0 +1,73 @@
+# Erlang/OTP build artifacts
+_build/
+deps/
+*.beam
+*.o
+*.so
+*.dll
+*.dylib
+*.app
+erl_crash.dump
+*.crashdump
+rebar3.crashdump
+
+# Rebar3 artifacts
+rebar.lock
+.rebar/
+.rebar3/
+
+# Compiled object files and shared libraries
+priv/*.so
+priv/*.dll
+priv/*.dylib
+priv/lib/
+
+# Rust build artifacts
+target/
+Cargo.lock
+**/*.rs.bk
+
+# Native code compilation artifacts
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# PLT files (Dialyzer)
+*.plt
+.dialyzer_plt
+
+# Coverage reports
+cover/
+*.coverdata
+
+# Documentation build
+doc/html/
+doc/pdf/
+doc/man/
+
+# Test artifacts
+ct_run.*/
+test/*.beam
+eunit.coverdata

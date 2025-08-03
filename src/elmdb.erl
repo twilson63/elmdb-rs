@@ -9,7 +9,7 @@
 -module(elmdb).
 
 %% Environment management
--export([env_open/2, env_close/1, env_close_by_name/1]).
+-export([env_open/2, env_close/1, env_close_by_name/1, env_status/1]).
 
 %% Database operations
 -export([db_open/2]).
@@ -74,6 +74,13 @@ env_close(_Env) ->
 %% @returns ok
 -spec env_close_by_name(Path :: binary() | string()) -> ok.
 env_close_by_name(_Path) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Get status information about an environment
+%% @param Env Environment handle
+%% @returns {ok, Closed, RefCount, Path} where Closed is boolean, RefCount is integer
+-spec env_status(Env :: term()) -> {ok, boolean(), integer(), string()}.
+env_status(_Env) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

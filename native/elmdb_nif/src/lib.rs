@@ -75,6 +75,7 @@ pub struct LmdbEnv {
     env: Environment,
     path: String,
     closed: Arc<Mutex<bool>>,
+    ref_count: Arc<Mutex<usize>>,  // Track how many databases are using this env
 }
 
 pub struct LmdbDatabase {
@@ -163,6 +164,7 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
         env: lmdb_environment,
         path: path_str.to_string(),
         closed: Arc::new(Mutex::new(false)),
+        ref_count: Arc::new(Mutex::new(0)),
     };
     let resource = ResourceArc::new(lmdb_env);
     
@@ -177,6 +179,15 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
 
 #[rustler::nif]
 fn env_close<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Term<'a>> {
+    // Check if there are still active database references
+    {
+        let ref_count = env_handle.ref_count.lock().unwrap();
+        if *ref_count > 0 {
+            return Ok((atoms::error(), atoms::environment_error(), 
+                      format!("Environment still has {} active database references", *ref_count)).encode(env));
+        }
+    }
+    
     // Mark environment as closed
     {
         let mut closed = env_handle.closed.lock().unwrap();
@@ -213,6 +224,15 @@ fn env_close_by_name<'a>(env: Env<'a>, path: Term<'a>) -> NifResult<Term<'a>> {
     {
         let mut environments = ENVIRONMENTS.lock().unwrap();
         if let Some(env_handle) = environments.get(path_str) {
+            // Check if there are still active database references
+            {
+                let ref_count = env_handle.ref_count.lock().unwrap();
+                if *ref_count > 0 {
+                    return Ok((atoms::error(), atoms::environment_error(), 
+                              format!("Environment still has {} active database references", *ref_count)).encode(env));
+                }
+            }
+            
             // Mark as closed
             let mut closed = env_handle.closed.lock().unwrap();
             *closed = true;
@@ -273,6 +293,12 @@ fn db_open<'a>(
         }
     };
     
+    // Increment reference count for this environment
+    {
+        let mut ref_count = env_handle.ref_count.lock().map_err(|_| Error::BadArg)?;
+        *ref_count += 1;
+    }
+    
     // Create database resource with write buffer (default buffer size: 1000 operations)
     let lmdb_db = LmdbDatabase { 
         db: database,
@@ -303,10 +329,11 @@ impl LmdbDatabase {
         let mut txn = self.env.env.begin_rw_txn()
             .map_err(|_| "Failed to begin write transaction")?;
         
-        // Execute all buffered operations
+        // Execute all buffered operations  
         for op in operations {
             txn.put(self.db, &op.key, &op.value, WriteFlags::empty())
-                .map_err(|e| format!("Failed to put value: {:?}", e))?;
+                .map_err(|e| format!("Failed to put value: key_len={}, value_len={}, error={:?}", 
+                                     op.key.len(), op.value.len(), e))?;
         }
         
         // Commit the transaction
@@ -327,7 +354,7 @@ impl LmdbDatabase {
         
         // Quick validation by attempting to begin a read transaction
         let _txn = self.env.env.begin_ro_txn()
-            .map_err(|_| "Database environment is invalid or closed")?;
+            .map_err(|e| format!("Database environment is invalid or closed: {:?}", e))?;
         Ok(())
     }
 }
@@ -337,6 +364,13 @@ impl Drop for LmdbDatabase {
         // Attempt to flush any remaining buffered writes when the database is dropped
         // We ignore errors here since we can't handle them in Drop
         let _ = self.flush_write_buffer();
+        
+        // Decrement reference count for the environment
+        if let Ok(mut ref_count) = self.env.ref_count.lock() {
+            if *ref_count > 0 {
+                *ref_count -= 1;
+            }
+        }
     }
 }
 
@@ -359,7 +393,33 @@ fn put<'a>(
     let key_vec = key.as_slice().to_vec();
     let value_vec = value.as_slice().to_vec();
     
-    // Add to write buffer
+    // Handle empty keys directly (don't buffer them as they cause issues in LMDB batch operations)
+    if key_vec.is_empty() {
+        let mut txn = match db_handle.env.env.begin_rw_txn() {
+            Ok(txn) => txn,
+            Err(_) => {
+                return Ok((atoms::error(), atoms::transaction_error(), "Failed to begin write transaction".to_string()).encode(env));
+            }
+        };
+        
+        match txn.put(db_handle.db, &key_vec, &value_vec, WriteFlags::empty()) {
+            Ok(()) => {
+                match txn.commit() {
+                    Ok(()) => return Ok(atoms::ok().encode(env)),
+                    Err(_) => return Ok((atoms::error(), atoms::transaction_error(), "Failed to commit transaction".to_string()).encode(env))
+                }
+            },
+            Err(lmdb_err) => {
+                let error_msg = match lmdb_err {
+                    lmdb::Error::BadValSize => "Empty key not supported".to_string(),
+                    _ => format!("Failed to put value: {:?}", lmdb_err)
+                };
+                return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+            }
+        }
+    }
+    
+    // Add to write buffer for non-empty keys
     let needs_flush = {
         let mut buffer = match db_handle.write_buffer.lock() {
             Ok(buffer) => buffer,
@@ -513,7 +573,8 @@ fn list<'a>(
     // Start from the first key and iterate through all keys
     let mut children = HashSet::new();
     
-    // Iterate through all keys using cursor
+    // Iterate through all keys using cursor (original working version)
+    // Note: This may panic on empty databases - this is a known issue with the LMDB crate
     let mut cursor_iter = cursor.iter_start();
     while let Some((key, _value)) = cursor_iter.next() {
         // Check if the key starts with our prefix
@@ -635,4 +696,23 @@ struct DbOptions {
     create: bool,
 }
 
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, db_open, put, put_batch, get, list, flush], load = init);
+///===================================================================
+/// Debug/Status Operations
+///===================================================================
+
+#[rustler::nif]
+fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Term<'a>> {
+    let closed = {
+        let closed = env_handle.closed.lock().map_err(|_| Error::BadArg)?;
+        *closed
+    };
+    
+    let ref_count = {
+        let ref_count = env_handle.ref_count.lock().map_err(|_| Error::BadArg)?;
+        *ref_count
+    };
+    
+    Ok((atoms::ok(), closed, ref_count, env_handle.path.clone()).encode(env))
+}
+
+rustler::init!("elmdb", [env_open, env_close, env_close_by_name, db_open, put, put_batch, get, list, flush, env_status], load = init);

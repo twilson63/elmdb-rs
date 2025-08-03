@@ -232,6 +232,8 @@ test_db_open_closed_env(Config) ->
     case catch elmdb:db_open(Env, [create]) of
         {error, _Reason} ->
             ct:pal("Expected error for closed environment");
+        {error, _Type, _Description} ->
+            ct:pal("Expected error for closed environment");
         {'EXIT', _} ->
             ct:pal("Expected crash for closed environment");
         {ok, _DB} ->
@@ -280,6 +282,8 @@ test_put_closed_db(Config) ->
     % Try to put after closing
     case catch elmdb:put(DB, <<"key">>, <<"value">>) of
         {error, _Reason} ->
+            ct:pal("Expected error for closed database");
+        {error, _Type, _Description} ->
             ct:pal("Expected error for closed database");
         {'EXIT', _} ->
             ct:pal("Expected crash for closed database");
@@ -331,6 +335,8 @@ test_get_closed_db(Config) ->
     % Try to get after closing
     case catch elmdb:get(DB, <<"key">>) of
         {error, _Reason} ->
+            ct:pal("Expected error for closed database");
+        {error, _Type, _Description} ->
             ct:pal("Expected error for closed database");
         {'EXIT', _} ->
             ct:pal("Expected crash for closed database");
@@ -386,6 +392,8 @@ test_list_closed_db(Config) ->
     % Try to list after closing
     case catch elmdb:list(DB, <<"prefix">>) of
         {error, _Reason} ->
+            ct:pal("Expected error for closed database");
+        {error, _Type, _Description} ->
             ct:pal("Expected error for closed database");
         {'EXIT', _} ->
             ct:pal("Expected crash for closed database");
@@ -452,6 +460,8 @@ test_operations_after_env_close(Config) ->
     lists:foreach(fun(Op) ->
         case catch Op() of
             {error, _Reason} ->
+                ct:pal("Operation failed as expected after env close");
+            {error, _Type, _Description} ->
                 ct:pal("Operation failed as expected after env close");
             {'EXIT', _} ->
                 ct:pal("Operation crashed as expected after env close");

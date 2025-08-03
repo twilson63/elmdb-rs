@@ -15,7 +15,7 @@
 -export([db_open/2]).
 
 %% Key-value operations
--export([put/3, get/2]).
+-export([put/3, put_batch/2, get/2, flush/1]).
 
 %% List operations
 -export([list/2]).
@@ -55,6 +55,7 @@ init() ->
 %%   - {map_size, integer()}: Maximum database size in bytes
 %%   - no_mem_init: Don't initialize malloc'd memory before writing to disk
 %%   - no_sync: Don't flush system buffers to disk when committing
+%%   - write_map: Use a writeable memory map for better performance
 %% @returns {ok, Env} where Env is an opaque environment handle
 -spec env_open(Path :: binary() | string(), Options :: list()) -> 
     {ok, term()} | {error, term()}.
@@ -104,6 +105,16 @@ db_open(_Env, _Options) ->
 put(_DBInstance, _Key, _Value) ->
     erlang:nif_error(nif_not_loaded).
 
+%% @doc Write multiple key-value pairs to the database in a single transaction
+%% @param DBInstance Database handle
+%% @param KeyValuePairs List of {Key, Value} tuples where Key and Value are binaries
+%% @returns ok on success, or {ok, SuccessCount, Errors} if some writes failed
+%% @throws {error, Type, Description} on failure
+-spec put_batch(DBInstance :: term(), KeyValuePairs :: [{binary(), binary()}]) -> 
+    ok | {ok, integer(), list()} | {error, term(), binary()}.
+put_batch(_DBInstance, _KeyValuePairs) ->
+    erlang:nif_error(nif_not_loaded).
+
 %% @doc Read a value by key from the database
 %% @param DBInstance Database handle
 %% @param Key The key to read (binary)
@@ -124,4 +135,11 @@ get(_DBInstance, _Key) ->
 -spec list(DBInstance :: term(), Key :: binary()) -> 
     {ok, [binary()]} | not_found.
 list(_DBInstance, _Key) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Explicitly flush any buffered writes to disk
+%% @param DBInstance Database handle
+%% @returns ok on success
+-spec flush(DBInstance :: term()) -> ok | {error, term(), binary()}.
+flush(_DBInstance) ->
     erlang:nif_error(nif_not_loaded).

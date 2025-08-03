@@ -14,6 +14,7 @@
 %% Test cases
 -export([
     bench_100k_writes/1,
+    bench_100k_writes_batch/1,
     bench_100k_reads/1,
     bench_hierarchical_keys/1,
     bench_concurrent_access/1
@@ -28,6 +29,7 @@
 all() ->
     [
         bench_100k_writes,
+        bench_100k_writes_batch,
         bench_100k_reads,
         bench_hierarchical_keys,
         bench_concurrent_access
@@ -51,8 +53,8 @@ init_per_testcase(TestCase, Config) ->
     TestDir = filename:join([?config(priv_dir, Config), atom_to_list(TestCase)]),
     ok = filelib:ensure_dir(filename:join(TestDir, "dummy")),
     
-    % Try to initialize environment
-    case catch elmdb:env_open(TestDir, [{map_size, 1024*1024*1024}]) of  % 1GB
+    % Try to initialize environment with performance flags
+    case catch elmdb:env_open(TestDir, [{map_size, 1024*1024*1024}, no_sync, no_mem_init, write_map]) of  % 1GB
         {ok, Env} ->
             ct:print("Environment opened for ~p: ~p", [TestCase, Env]),
             case catch elmdb:db_open(Env, [create]) of
@@ -139,6 +141,60 @@ bench_100k_writes(Config) ->
     
     % Store results in config for next test
     [{write_time, TimeInSeconds}, {write_rate, RecordsPerSecond} | Config].
+
+%% @doc Benchmark writing 100,000 records using batch operations
+bench_100k_writes_batch(Config) ->
+    DB = ?config(db, Config),
+    RecordCount = 100000,
+    BatchSize = 1000,  % Process in batches of 1000
+    
+    ct:print("Starting batch benchmark: Writing ~p records in batches of ~p", [RecordCount, BatchSize]),
+    
+    % Generate all key-value pairs
+    KeyValuePairs = generate_key_value_pairs(RecordCount),
+    
+    % Split into batches
+    Batches = split_into_batches(KeyValuePairs, BatchSize),
+    
+    % Record start time
+    StartTime = erlang:monotonic_time(microsecond),
+    
+    % Write batches
+    BatchResults = write_batches(DB, Batches),
+    
+    % Record end time
+    EndTime = erlang:monotonic_time(microsecond),
+    
+    % Calculate performance metrics
+    TotalTime = EndTime - StartTime,
+    TimeInSeconds = TotalTime / 1000000,
+    RecordsPerSecond = RecordCount / TimeInSeconds,
+    
+    ct:print("Batch Write Performance Results:"),
+    ct:print("  Records written: ~p", [RecordCount]),
+    ct:print("  Batch size: ~p", [BatchSize]),
+    ct:print("  Number of batches: ~p", [length(Batches)]),
+    ct:print("  Total time: ~.2f seconds", [TimeInSeconds]),
+    ct:print("  Records/second: ~.2f", [RecordsPerSecond]),
+    ct:print("  Microseconds per record: ~.2f", [TotalTime / RecordCount]),
+    
+    % Analyze batch results
+    case BatchResults of
+        {ok, SuccessCount, Errors} ->
+            ct:print("  Successful batch writes: ~p", [SuccessCount]),
+            case Errors of
+                [] -> 
+                    ct:print("  No errors occurred");
+                _ ->
+                    ct:print("  Errors: ~p", [length(Errors)]),
+                    ct:print("  First 5 errors: ~p", [lists:sublist(Errors, 5)])
+            end;
+        {error, BatchReason} ->
+            ct:fail("Batch write benchmark failed: ~p", [BatchReason])
+    end,
+    
+    % Store results in config for comparison
+    [{batch_write_time, TimeInSeconds}, {batch_write_rate, RecordsPerSecond} | Config].
 
 %% @doc Benchmark reading 100,000 records with performance metrics
 bench_100k_reads(Config) ->
@@ -400,3 +456,39 @@ write_concurrent_records(DB, ProcessId, Count) ->
         Value = <<"proc", ProcessId:16, "_value", N:32>>,
         elmdb:put(DB, Key, Value)
     end, lists:seq(1, Count)).
+
+%% @doc Generate key-value pairs for batch operations
+generate_key_value_pairs(Count) ->
+    lists:map(fun(N) ->
+        Key = <<"key", N:32>>,
+        Value = <<"value", N:32>>,
+        {Key, Value}
+    end, lists:seq(1, Count)).
+
+%% @doc Split key-value pairs into batches
+split_into_batches(KeyValuePairs, BatchSize) ->
+    split_into_batches(KeyValuePairs, BatchSize, []).
+
+split_into_batches([], _BatchSize, Acc) ->
+    lists:reverse(Acc);
+split_into_batches(KeyValuePairs, BatchSize, Acc) ->
+    {Batch, Remaining} = lists:split(min(BatchSize, length(KeyValuePairs)), KeyValuePairs),
+    split_into_batches(Remaining, BatchSize, [Batch | Acc]).
+
+%% @doc Write batches of key-value pairs
+write_batches(DB, Batches) ->
+    write_batches(DB, Batches, 0, []).
+
+write_batches(_DB, [], SuccessCount, Errors) ->
+    {ok, SuccessCount, lists:reverse(Errors)};
+write_batches(DB, [Batch | Rest], SuccessCount, Errors) ->
+    case catch elmdb:put_batch(DB, Batch) of
+        ok ->
+            write_batches(DB, Rest, SuccessCount + 1, Errors);
+        {ok, _BatchSuccessCount, BatchErrors} ->
+            write_batches(DB, Rest, SuccessCount + 1, BatchErrors ++ Errors);
+        {error, Reason} ->
+            write_batches(DB, Rest, SuccessCount, [{batch_error, Reason} | Errors]);
+        Error ->
+            write_batches(DB, Rest, SuccessCount, [{batch_error, Error} | Errors])
+    end.

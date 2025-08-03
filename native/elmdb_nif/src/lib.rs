@@ -239,6 +239,14 @@ fn db_open<'a>(
 ) -> NifResult<Term<'a>> {
     let parsed_options = parse_db_options(options)?;
     
+    // Check if environment is closed before attempting to open database
+    {
+        let closed = env_handle.closed.lock().map_err(|_| Error::BadArg)?;
+        if *closed {
+            return Ok((atoms::error(), atoms::database_error(), "Environment is closed".to_string()).encode(env));
+        }
+    }
+    
     // Set database flags based on options
     let mut flags = DatabaseFlags::empty();
     if parsed_options.create {

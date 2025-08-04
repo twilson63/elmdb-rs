@@ -9,10 +9,10 @@
 -module(elmdb).
 
 %% Environment management
--export([env_open/2, env_close/1, env_close_by_name/1, env_status/1]).
+-export([env_open/2, env_close/1, env_close_by_name/1, env_force_close/1, env_force_close_by_name/1, env_status/1]).
 
 %% Database operations
--export([db_open/2]).
+-export([db_open/2, db_close/1]).
 
 %% Key-value operations
 -export([put/3, put_batch/2, get/2, flush/1]).
@@ -76,6 +76,20 @@ env_close(_Env) ->
 env_close_by_name(_Path) ->
     erlang:nif_error(nif_not_loaded).
 
+%% @doc Force close an environment, even with active database references
+%% @param Env Environment handle from env_open
+%% @returns ok or {ok, Warning} if there were active references
+-spec env_force_close(Env :: term()) -> ok | {ok, string()}.
+env_force_close(_Env) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Force close an environment by its directory path, even with active database references
+%% @param Path Directory path of the database
+%% @returns ok or {ok, Warning} if there were active references
+-spec env_force_close_by_name(Path :: binary() | string()) -> ok | {ok, string()}.
+env_force_close_by_name(_Path) ->
+    erlang:nif_error(nif_not_loaded).
+
 %% @doc Get status information about an environment
 %% @param Env Environment handle
 %% @returns {ok, Closed, RefCount, Path} where Closed is boolean, RefCount is integer
@@ -95,6 +109,13 @@ env_status(_Env) ->
 -spec db_open(Env :: term(), Options :: list()) -> 
     {ok, term()} | {error, term()}.
 db_open(_Env, _Options) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Close a database handle and decrement environment reference count
+%% @param DBInstance Database handle from db_open
+%% @returns ok
+-spec db_close(DBInstance :: term()) -> ok | {error, term(), string()}.
+db_close(_DBInstance) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

@@ -81,6 +81,7 @@ pub struct LmdbDatabase {
     db: Database,
     env: ResourceArc<LmdbEnv>,
     write_buffer: Arc<Mutex<WriteBuffer>>,
+    closed: Arc<Mutex<bool>>,
 }
 
 // Global state for managing environments (singleton pattern)
@@ -246,9 +247,108 @@ fn env_close_by_name<'a>(env: Env<'a>, path: Term<'a>) -> NifResult<Term<'a>> {
     }
 }
 
+#[rustler::nif]
+fn env_force_close<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Term<'a>> {
+    let ref_count = {
+        let ref_count = env_handle.ref_count.lock().unwrap();
+        *ref_count
+    };
+    
+    // Mark environment as closed regardless of active references
+    {
+        let mut closed = env_handle.closed.lock().unwrap();
+        *closed = true;
+    }
+    
+    // Remove from global environments map
+    {
+        let mut environments = ENVIRONMENTS.lock().unwrap();
+        environments.remove(&env_handle.path);
+    }
+    
+    if ref_count > 0 {
+        Ok((atoms::ok(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
+    } else {
+        Ok(atoms::ok().encode(env))
+    }
+}
+
+#[rustler::nif]
+fn env_force_close_by_name<'a>(env: Env<'a>, path: Term<'a>) -> NifResult<Term<'a>> {
+    let path_string = if let Ok(binary) = path.decode::<Binary>() {
+        std::str::from_utf8(&binary).map_err(|_| Error::BadArg)?.to_string()
+    } else if let Ok(string) = path.decode::<String>() {
+        string
+    } else if let Ok(chars) = path.decode::<Vec<u8>>() {
+        // Handle Erlang strings (lists of integers)
+        std::str::from_utf8(&chars).map_err(|_| Error::BadArg)?.to_string()
+    } else {
+        return Err(Error::BadArg);
+    };
+    let path_str = &path_string;
+    
+    // Force close environment regardless of active references
+    {
+        let mut environments = ENVIRONMENTS.lock().unwrap();
+        if let Some(env_handle) = environments.get(path_str) {
+            let ref_count = {
+                let ref_count = env_handle.ref_count.lock().unwrap();
+                *ref_count
+            };
+            
+            // Mark as closed
+            let mut closed = env_handle.closed.lock().unwrap();
+            *closed = true;
+            drop(closed);
+            
+            // Remove from map
+            environments.remove(path_str);
+            
+            if ref_count > 0 {
+                Ok((atoms::ok(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
+            } else {
+                Ok(atoms::ok().encode(env))
+            }
+        } else {
+            Ok((atoms::error(), atoms::not_found()).encode(env))
+        }
+    }
+}
+
 ///===================================================================
 /// Database Operations
 ///===================================================================
+
+#[rustler::nif]
+fn db_close<'a>(
+    env: Env<'a>,
+    db_handle: ResourceArc<LmdbDatabase>
+) -> NifResult<Term<'a>> {
+    // Mark database as closed
+    {
+        let mut closed = db_handle.closed.lock().map_err(|_| Error::BadArg)?;
+        if *closed {
+            return Ok((atoms::error(), atoms::database_error(), "Database already closed".to_string()).encode(env));
+        }
+        *closed = true;
+    }
+    
+    // Force flush any pending writes
+    if let Err(error_msg) = db_handle.force_flush_buffer() {
+        // Log error but don't fail the close operation
+        eprintln!("Warning: Failed to flush buffer during db_close: {}", error_msg);
+    }
+    
+    // Decrement reference count for the environment
+    {
+        let mut ref_count = db_handle.env.ref_count.lock().map_err(|_| Error::BadArg)?;
+        if *ref_count > 0 {
+            *ref_count -= 1;
+        }
+    }
+    
+    Ok(atoms::ok().encode(env))
+}
 
 #[rustler::nif]
 fn db_open<'a>(
@@ -303,6 +403,7 @@ fn db_open<'a>(
         db: database,
         env: env_handle.clone(),
         write_buffer: Arc::new(Mutex::new(WriteBuffer::new(1000))),
+        closed: Arc::new(Mutex::new(false)),
     };
     let resource = ResourceArc::new(lmdb_db);
     
@@ -340,6 +441,14 @@ impl LmdbDatabase {
     // 3. Explicit flush is called
     // 4. Database is being closed
     // This dramatically improves write performance by reducing transaction overhead
+    
+    fn is_closed(&self) -> bool {
+        if let Ok(closed) = self.closed.lock() {
+            *closed
+        } else {
+            true // If we can't check, assume closed for safety
+        }
+    }
 
 
     // New method for immediate batched write without buffering
@@ -413,6 +522,11 @@ impl LmdbDatabase {
     }
 
     fn validate_database(&self) -> Result<(), String> {
+        // Check if database is marked as closed
+        if self.is_closed() {
+            return Err("Database is closed".to_string());
+        }
+        
         // Check if environment is marked as closed
         {
             let closed = self.env.closed.lock().map_err(|_| "Failed to check environment status")?;
@@ -430,14 +544,27 @@ impl LmdbDatabase {
 
 impl Drop for LmdbDatabase {
     fn drop(&mut self) {
-        // Attempt to flush any remaining buffered writes when the database is dropped
-        // We ignore errors here since we can't handle them in Drop
-        let _ = self.force_flush_buffer();
+        // Check if database was already explicitly closed
+        let already_closed = {
+            if let Ok(closed) = self.closed.lock() {
+                *closed
+            } else {
+                false
+            }
+        };
         
-        // Decrement reference count for the environment
-        if let Ok(mut ref_count) = self.env.ref_count.lock() {
-            if *ref_count > 0 {
-                *ref_count -= 1;
+        // Only decrement reference count if not already closed
+        // (explicit close already decremented it)
+        if !already_closed {
+            // Attempt to flush any remaining buffered writes when the database is dropped
+            // We ignore errors here since we can't handle them in Drop
+            let _ = self.force_flush_buffer();
+            
+            // Decrement reference count for the environment
+            if let Ok(mut ref_count) = self.env.ref_count.lock() {
+                if *ref_count > 0 {
+                    *ref_count -= 1;
+                }
             }
         }
     }
@@ -454,15 +581,9 @@ fn put<'a>(
     key: Binary,
     value: Binary
 ) -> NifResult<Term<'a>> {
-    // Quick validation: check if environment is closed without creating a transaction
-    {
-        let closed = match db_handle.env.closed.lock() {
-            Ok(closed) => *closed,
-            Err(_) => return Ok((atoms::error(), atoms::database_error(), "Failed to check environment status".to_string()).encode(env))
-        };
-        if closed {
-            return Ok((atoms::error(), atoms::database_error(), "Database environment is closed".to_string()).encode(env));
-        }
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
     }
 
     let key_vec = key.as_slice().to_vec();
@@ -508,6 +629,11 @@ fn put_batch<'a>(
     db_handle: ResourceArc<LmdbDatabase>,
     key_value_pairs: Vec<(Binary, Binary)>
 ) -> NifResult<Term<'a>> {
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    }
+    
     if key_value_pairs.is_empty() {
         return Ok(atoms::ok().encode(env));
     }
@@ -565,6 +691,11 @@ fn get<'a>(
     db_handle: ResourceArc<LmdbDatabase>,
     key: Binary
 ) -> NifResult<Term<'a>> {
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    }
+    
     let key_bytes = key.as_slice();
     
     // Only flush write buffer if there are pending writes
@@ -611,6 +742,11 @@ fn list<'a>(
     db_handle: ResourceArc<LmdbDatabase>,
     key_prefix: Binary
 ) -> NifResult<Term<'a>> {
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    }
+    
     let prefix_bytes = key_prefix.as_slice();
     
     // Only flush write buffer if there are pending writes
@@ -740,6 +876,11 @@ fn flush<'a>(
     env: Env<'a>,
     db_handle: ResourceArc<LmdbDatabase>
 ) -> NifResult<Term<'a>> {
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    }
+    
     match db_handle.force_flush_buffer() {
         Ok(()) => Ok(atoms::ok().encode(env)),
         Err(error_msg) => Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env))
@@ -832,4 +973,4 @@ fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<T
     Ok((atoms::ok(), closed, ref_count, env_handle.path.clone()).encode(env))
 }
 
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, db_open, put, put_batch, get, list, flush, env_status], load = init);
+rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);

@@ -179,9 +179,10 @@ test_env_close_invalid_handle(_Config) ->
     ok.
 
 test_env_close_double_close(Config) ->
-    {Env, _DB} = setup_database(Config),
+    {Env, DB} = setup_database(Config),
     
-    % Close environment once
+    % Close database first, then environment once
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % Try to close again - should handle gracefully
@@ -223,9 +224,10 @@ test_env_close_by_name_invalid_path(_Config) ->
 %%====================================================================
 
 test_db_open_closed_env(Config) ->
-    {Env, _DB} = setup_database(Config),
+    {Env, DB} = setup_database(Config),
     
-    % Close environment first
+    % Close database first, then environment
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % Try to open database on closed environment
@@ -276,7 +278,8 @@ test_db_open_invalid_options(_Config) ->
 test_put_closed_db(Config) ->
     {Env, DB} = setup_database(Config),
     
-    % Close environment (which should invalidate DB)
+    % Close database first, then environment (which should invalidate DB)
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % Try to put after closing
@@ -322,6 +325,7 @@ test_put_invalid_key_value(_Config) ->
         end
     end, InvalidInputs),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.
@@ -329,7 +333,8 @@ test_put_invalid_key_value(_Config) ->
 test_get_closed_db(Config) ->
     {Env, DB} = setup_database(Config),
     
-    % Close environment
+    % Close database first, then environment
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % Try to get after closing
@@ -375,6 +380,7 @@ test_get_invalid_key(_Config) ->
         end
     end, InvalidKeys),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.
@@ -386,7 +392,8 @@ test_get_invalid_key(_Config) ->
 test_list_closed_db(Config) ->
     {Env, DB} = setup_database(Config),
     
-    % Close environment
+    % Close database first, then environment
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % Try to list after closing
@@ -432,6 +439,7 @@ test_list_invalid_key(_Config) ->
         end
     end, InvalidKeys),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.
@@ -446,7 +454,8 @@ test_operations_after_env_close(Config) ->
     % Put some data first
     ok = elmdb:put(DB, <<"test_key">>, <<"test_value">>),
     
-    % Close environment
+    % Close database first, then environment
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     
     % All subsequent operations should fail
@@ -510,6 +519,7 @@ test_large_key_value_limits(_Config) ->
         {'EXIT', _} -> ct:pal("Large value caused crash")
     end,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.
@@ -538,6 +548,7 @@ test_invalid_binary_inputs(_Config) ->
         {'EXIT', _} -> ct:pal("Null bytes in key caused crash")
     end,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.
@@ -566,6 +577,7 @@ test_memory_exhaustion_simulation(_Config) ->
         {error, _} -> ct:pal("Second large value failed as expected")
     end,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     file:del_dir_r(TestDir),
     ok.

@@ -124,6 +124,7 @@ test_bulk_put_operations(Config) ->
         
     end, BatchSizes),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -154,6 +155,7 @@ test_bulk_get_operations(Config) ->
     ct:pal("Bulk get ~p records: ~.2f seconds (~.0f ops/sec)", 
            [BatchSize, TimeSeconds, OpsPerSecond]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -192,6 +194,7 @@ test_mixed_read_write_operations(Config) ->
     ct:pal("Mixed operations: ~.2f seconds (~.0f ops/sec)", 
            [TimeSeconds, OpsPerSecond]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -229,6 +232,7 @@ test_large_value_handling(Config) ->
         
     end, ValueSizes),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -268,6 +272,7 @@ test_many_small_keys(Config) ->
     ct:pal("Random access 1000 keys: ~.2f ms (~.0f ops/sec)", 
            [RandomTimeMs, RandomOpsPerSec]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -308,6 +313,7 @@ test_sequential_vs_random_access(Config) ->
     ct:pal("Random access: ~.0f ops/sec", [RandOpsPerSec]),
     ct:pal("Sequential/Random ratio: ~.2f", [SeqOpsPerSec / RandOpsPerSec]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -360,6 +366,7 @@ test_concurrent_readers(Config) ->
     ct:pal("Concurrent reads: ~.2f seconds (~.0f ops/sec total)", 
            [TimeSeconds, OpsPerSecond]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -416,6 +423,7 @@ test_concurrent_writers(Config) ->
             ct:pal("This may be expected if the NIF serializes writes")
     end,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -448,6 +456,7 @@ test_memory_usage_patterns(Config) ->
         
     end, BatchSizes),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -498,6 +507,7 @@ test_list_performance(Config) ->
     ct:pal("List all groups (~p items): ~.2f ms", 
            [length(AllItems), AllTimeMs]),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -532,6 +542,7 @@ test_database_growth(Config) ->
         TotalSize
     end, 0, GrowthSteps),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -565,5 +576,6 @@ test_key_iteration_performance(Config) ->
         end
     end, Prefixes),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.

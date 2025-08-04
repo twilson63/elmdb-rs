@@ -123,6 +123,7 @@ test_db_open_create(Config) ->
     % Verify database handle is opaque term
     true = is_reference(DB) orelse is_binary(DB) orelse is_tuple(DB),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -134,8 +135,10 @@ test_db_open_no_create(Config) ->
     % Test database open without create flag on new environment
     % This should either succeed (if default DB exists) or fail gracefully
     case elmdb:db_open(Env, []) of
-        {ok, _DB} -> ok;
-        {error, _Reason} -> ok
+        {ok, DB} -> 
+            ok = elmdb:db_close(DB);
+        {error, _Reason} -> 
+            ok
     end,
     
     ok = elmdb:env_close(Env),
@@ -160,6 +163,7 @@ test_basic_put_get(Config) ->
     {ok, RetrievedValue} = elmdb:get(DB, Key),
     Value = RetrievedValue,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -173,6 +177,7 @@ test_get_missing_key(Config) ->
     MissingKey = <<"missing_key">>,
     not_found = elmdb:get(DB, MissingKey),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -190,6 +195,7 @@ test_put_get_large_value(Config) ->
     {ok, RetrievedValue} = elmdb:get(DB, Key),
     Value = RetrievedValue,
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -248,6 +254,7 @@ test_put_get_binary_keys(Config) ->
         end
     end, TestCases),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -269,6 +276,7 @@ test_put_overwrite_value(Config) ->
     ok = elmdb:put(DB, Key, Value2),
     {ok, Value2} = elmdb:get(DB, Key),
     
+    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -300,5 +308,7 @@ test_multiple_databases(Config) ->
     true = (RetrievedValue1 =:= Value1) orelse (RetrievedValue1 =:= Value2),
     true = (RetrievedValue2 =:= Value1) orelse (RetrievedValue2 =:= Value2),
     
+    ok = elmdb:db_close(DB1),
+    ok = elmdb:db_close(DB2),
     ok = elmdb:env_close(Env),
     ok.

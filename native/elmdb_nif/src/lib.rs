@@ -18,8 +18,6 @@ mod atoms {
         write_map,
         create,
         // Error atoms
-        invalid_path,
-        permission_denied,
         already_open,
         environment_error,
         database_error,
@@ -267,7 +265,7 @@ fn env_force_close<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifRes
     }
     
     if ref_count > 0 {
-        Ok((atoms::ok(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
+        Ok((atoms::ok(), atoms::environment_error(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
     } else {
         Ok(atoms::ok().encode(env))
     }
@@ -362,7 +360,7 @@ fn db_open<'a>(
     {
         let closed = env_handle.closed.lock().map_err(|_| Error::BadArg)?;
         if *closed {
-            return Ok((atoms::error(), atoms::database_error(), "Environment is closed".to_string()).encode(env));
+            return Ok((atoms::error(), atoms::environment_error(), "Environment is closed".to_string()).encode(env));
         }
     }
     
@@ -387,7 +385,9 @@ fn db_open<'a>(
                 lmdb::Error::NotFound if !parsed_options.create => {
                     Ok((atoms::error(), atoms::not_found()).encode(env))
                 },
-                _ => Ok((atoms::error(), atoms::database_error()).encode(env))
+                _ => 
+                    Ok((atoms::error(), atoms::database_error(), 
+                        format!("Database could not be opened: error={:?}", lmdb_err).to_string()).encode(env))
             };
         }
     };
@@ -724,7 +724,7 @@ fn get<'a>(
             Ok((atoms::ok(), binary.release(env)).encode(env))
         },
         Err(lmdb::Error::NotFound) => {
-            Ok(atoms::not_found().encode(env))
+            Ok((atoms::error(), atoms::not_found()).encode(env))
         },
         Err(_) => {
             Ok((atoms::error(), atoms::database_error(), "Failed to get value".to_string()).encode(env))
@@ -846,9 +846,9 @@ fn list<'a>(
     }
     
     if children.is_empty() {
-        return Ok(atoms::not_found().encode(env));
+        return Ok((atoms::error(), atoms::not_found()).encode(env))
     }
-    
+
     // OPTIMIZATION: Pre-allocate result vector and minimize allocations
     let mut result_binaries = Vec::with_capacity(children.len());
     

@@ -58,21 +58,21 @@ init() ->
 %%   - write_map: Use a writeable memory map for better performance
 %% @returns {ok, Env} where Env is an opaque environment handle
 -spec env_open(Path :: binary() | string(), Options :: list()) -> 
-    {ok, term()} | {error, term()}.
+    {ok, term()} | {error, already_open | environment_error}.
 env_open(_Path, _Options) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Close an LMDB environment and release resources
 %% @param Env Environment handle from env_open
 %% @returns ok
--spec env_close(Env :: term()) -> ok.
+-spec env_close(Env :: term()) -> ok | {error, environment_error, binary()}.
 env_close(_Env) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Close an environment by its directory path (fallback method)
 %% @param Path Directory path of the database
 %% @returns ok
--spec env_close_by_name(Path :: binary() | string()) -> ok.
+-spec env_close_by_name(Path :: binary() | string()) -> ok | {error, environment_error, binary()} | {error, not_found}.
 env_close_by_name(_Path) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -86,7 +86,7 @@ env_force_close(_Env) ->
 %% @doc Force close an environment by its directory path, even with active database references
 %% @param Path Directory path of the database
 %% @returns ok or {ok, Warning} if there were active references
--spec env_force_close_by_name(Path :: binary() | string()) -> ok | {ok, string()}.
+-spec env_force_close_by_name(Path :: binary() | string()) -> ok | {ok, environment_error, binary()}.
 env_force_close_by_name(_Path) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -107,14 +107,14 @@ env_status(_Env) ->
 %%   - create: Create the database if it doesn't exist
 %% @returns {ok, DBInstance} where DBInstance is an opaque database handle
 -spec db_open(Env :: term(), Options :: list()) -> 
-    {ok, term()} | {error, term()}.
+    {ok, term()} | {error, not_found} | {error, database_error, binary()}.
 db_open(_Env, _Options) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Close a database handle and decrement environment reference count
 %% @param DBInstance Database handle from db_open
 %% @returns ok
--spec db_close(DBInstance :: term()) -> ok | {error, term(), string()}.
+-spec db_close(DBInstance :: term()) -> ok | {error, database_error, binary()}.
 db_close(_DBInstance) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -129,7 +129,7 @@ db_close(_DBInstance) ->
 %% @returns ok on success
 %% @throws {error, Type, Description} on failure
 -spec put(DBInstance :: term(), Key :: binary(), Value :: binary()) -> 
-    ok | {error, term(), binary()}.
+    ok | {error, database_error | transaction_error, binary()}.
 put(_DBInstance, _Key, _Value) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -139,16 +139,16 @@ put(_DBInstance, _Key, _Value) ->
 %% @returns ok on success, or {ok, SuccessCount, Errors} if some writes failed
 %% @throws {error, Type, Description} on failure
 -spec put_batch(DBInstance :: term(), KeyValuePairs :: [{binary(), binary()}]) -> 
-    ok | {ok, integer(), list()} | {error, term(), binary()}.
+    ok | {ok, integer(), list()} | {error, database_error | transaction_error, binary()}.
 put_batch(_DBInstance, _KeyValuePairs) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Read a value by key from the database
 %% @param DBInstance Database handle
 %% @param Key The key to read (binary)
-%% @returns {ok, Value} where Value is a binary, or not_found if key doesn't exist
+%% @returns {ok, Value} where Value is a binary, or {error, not_found} if key doesn't exist
 -spec get(DBInstance :: term(), Key :: binary()) -> 
-    {ok, binary()} | not_found.
+    {ok, binary()} | {error, not_found} | {error, database_error | transaction_error, binary()}.
 get(_DBInstance, _Key) ->
     erlang:nif_error(nif_not_loaded).
 
@@ -159,15 +159,15 @@ get(_DBInstance, _Key) ->
 %% @doc List all direct children of a group using prefix matching
 %% @param DBInstance Database handle
 %% @param Key The key prefix to search for (binary)
-%% @returns {ok, Children} where Children is a list of binaries, or not_found
+%% @returns {ok, Children} where Children is a list of binaries, or {error, not_found}
 -spec list(DBInstance :: term(), Key :: binary()) -> 
-    {ok, [binary()]} | not_found.
+    {ok, binary()} | {error, not_found} | {error, database_error | transaction_error, binary()}.
 list(_DBInstance, _Key) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Explicitly flush any buffered writes to disk
 %% @param DBInstance Database handle
 %% @returns ok on success
--spec flush(DBInstance :: term()) -> ok | {error, term(), binary()}.
+-spec flush(DBInstance :: term()) -> ok | {error, database_error | transaction_error, binary()}.
 flush(_DBInstance) ->
     erlang:nif_error(nif_not_loaded).

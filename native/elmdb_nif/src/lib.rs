@@ -51,21 +51,20 @@ impl WriteBuffer {
         }
     }
 
-    fn add(&mut self, key: Vec<u8>, value: Vec<u8>) -> bool {
-        self.operations.push_back(WriteOperation { key, value });
-        self.operations.len() >= self.max_size
-    }
-
     fn is_empty(&self) -> bool {
         self.operations.is_empty()
     }
 
-    fn len(&self) -> usize {
-        self.operations.len()
-    }
-
     fn drain(&mut self) -> Vec<WriteOperation> {
         self.operations.drain(..).collect()
+    }
+
+    fn should_flush(&self) -> bool {
+        self.operations.len() >= self.max_size
+    }
+
+    fn add_without_check(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        self.operations.push_back(WriteOperation { key, value });
     }
 }
 
@@ -311,25 +310,49 @@ fn db_open<'a>(
 }
 
 ///===================================================================
-/// Write Buffer Management
+/// Write Buffer Management - Transaction Batching Optimization
+///
+/// This implementation provides significant performance improvements for many small writes
+/// by batching them into single transactions, similar to the C NIF approach:
+///
+/// Key optimizations:
+/// 1. Accumulates writes in a buffer (default: 1000 operations)
+/// 2. Creates a single transaction per batch instead of per write
+/// 3. Only commits when:
+///    - Buffer reaches capacity
+///    - Read operation is performed (get/list)
+///    - Explicit flush is called
+///    - Database is being closed
+/// 4. Dramatically reduces transaction overhead and lock contention
+/// 5. Maintains consistency by flushing before reads
+///
+/// Performance benefits:
+/// - Fewer transaction creates/commits (major LMDB overhead)
+/// - Reduced write lock contention
+/// - Better throughput when mixing reads and writes
+/// - Maintains ACID properties
 ///===================================================================
 
 impl LmdbDatabase {
-    fn flush_write_buffer(&self) -> Result<(), String> {
-        let mut buffer = self.write_buffer.lock().map_err(|_| "Failed to lock write buffer")?;
-        
-        if buffer.is_empty() {
+    // Transaction batching optimization - keeps writes in buffer until:
+    // 1. Buffer reaches capacity (1000 operations by default)
+    // 2. A read operation is performed (get/list)
+    // 3. Explicit flush is called
+    // 4. Database is being closed
+    // This dramatically improves write performance by reducing transaction overhead
+
+
+    // New method for immediate batched write without buffering
+    fn write_immediate_batch(&self, operations: Vec<WriteOperation>) -> Result<(), String> {
+        if operations.is_empty() {
             return Ok(());
         }
-        
-        let operations = buffer.drain();
-        drop(buffer); // Release lock before starting transaction
-        
+
         // Create a write transaction for the batch
         let mut txn = self.env.env.begin_rw_txn()
             .map_err(|_| "Failed to begin write transaction")?;
         
-        // Execute all buffered operations  
+        // Execute all operations in the batch
         for op in operations {
             txn.put(self.db, &op.key, &op.value, WriteFlags::empty())
                 .map_err(|e| format!("Failed to put value: key_len={}, value_len={}, error={:?}", 
@@ -341,6 +364,43 @@ impl LmdbDatabase {
             .map_err(|_| "Failed to commit batch transaction")?;
         
         Ok(())
+    }
+
+    // Optimized method that tries to batch multiple puts in a single transaction
+    fn put_with_batching(&self, key: Vec<u8>, value: Vec<u8>) -> Result<(), String> {
+        // First, add to buffer
+        let (should_batch_immediately, current_ops) = {
+            let mut buffer = self.write_buffer.lock().map_err(|_| "Failed to lock write buffer")?;
+            buffer.add_without_check(key, value);
+            
+            // If buffer is full, drain it for immediate processing
+            if buffer.should_flush() {
+                let ops = buffer.drain();
+                (true, ops)
+            } else {
+                // Buffer has space, keep accumulating
+                (false, Vec::new())
+            }
+        };
+
+        if should_batch_immediately {
+            self.write_immediate_batch(current_ops)?;
+        }
+
+        Ok(())
+    }
+
+    // Force flush any pending writes - used before reads and on close
+    fn force_flush_buffer(&self) -> Result<(), String> {
+        let pending_ops = {
+            let mut buffer = self.write_buffer.lock().map_err(|_| "Failed to lock write buffer")?;
+            if buffer.is_empty() {
+                return Ok(());
+            }
+            buffer.drain()
+        };
+
+        self.write_immediate_batch(pending_ops)
     }
 
     fn validate_database(&self) -> Result<(), String> {
@@ -363,7 +423,7 @@ impl Drop for LmdbDatabase {
     fn drop(&mut self) {
         // Attempt to flush any remaining buffered writes when the database is dropped
         // We ignore errors here since we can't handle them in Drop
-        let _ = self.flush_write_buffer();
+        let _ = self.force_flush_buffer();
         
         // Decrement reference count for the environment
         if let Ok(mut ref_count) = self.env.ref_count.lock() {
@@ -419,22 +479,9 @@ fn put<'a>(
         }
     }
     
-    // Add to write buffer for non-empty keys
-    let needs_flush = {
-        let mut buffer = match db_handle.write_buffer.lock() {
-            Ok(buffer) => buffer,
-            Err(_) => {
-                return Ok((atoms::error(), atoms::transaction_error(), "Failed to lock write buffer".to_string()).encode(env));
-            }
-        };
-        buffer.add(key_vec, value_vec)
-    };
-    
-    // Flush if buffer is full
-    if needs_flush {
-        if let Err(error_msg) = db_handle.flush_write_buffer() {
-            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
-        }
+    // Add to write buffer for non-empty keys using new batching logic
+    if let Err(error_msg) = db_handle.put_with_batching(key_vec, value_vec) {
+        return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
     }
     
     Ok(atoms::ok().encode(env))
@@ -506,7 +553,7 @@ fn get<'a>(
     let key_bytes = key.as_slice();
     
     // Flush write buffer to ensure consistency
-    if let Err(error_msg) = db_handle.flush_write_buffer() {
+    if let Err(error_msg) = db_handle.force_flush_buffer() {
         return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
     }
     
@@ -549,9 +596,10 @@ fn list<'a>(
 ) -> NifResult<Term<'a>> {
     let prefix_bytes = key_prefix.as_slice();
     
-    // OPTIMIZATION: Skip write buffer flush for read-only operations
-    // Write buffer only affects writes, reads see committed data
-    // This eliminates a major performance bottleneck
+    // Flush write buffer to ensure read consistency
+    if let Err(error_msg) = db_handle.force_flush_buffer() {
+        return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+    }
     
     // Create a read-only transaction
     let txn = match (*db_handle).env.env.begin_ro_txn() {
@@ -647,7 +695,7 @@ fn flush<'a>(
     env: Env<'a>,
     db_handle: ResourceArc<LmdbDatabase>
 ) -> NifResult<Term<'a>> {
-    match db_handle.flush_write_buffer() {
+    match db_handle.force_flush_buffer() {
         Ok(()) => Ok(atoms::ok().encode(env)),
         Err(error_msg) => Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env))
     }

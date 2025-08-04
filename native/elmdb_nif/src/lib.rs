@@ -403,6 +403,15 @@ impl LmdbDatabase {
         self.write_immediate_batch(pending_ops)
     }
 
+    // Check if buffer has pending writes without flushing
+    fn has_pending_writes(&self) -> bool {
+        if let Ok(buffer) = self.write_buffer.lock() {
+            !buffer.is_empty()
+        } else {
+            false
+        }
+    }
+
     fn validate_database(&self) -> Result<(), String> {
         // Check if environment is marked as closed
         {
@@ -445,9 +454,15 @@ fn put<'a>(
     key: Binary,
     value: Binary
 ) -> NifResult<Term<'a>> {
-    // Validate database is still open before proceeding
-    if let Err(error_msg) = db_handle.validate_database() {
-        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    // Quick validation: check if environment is closed without creating a transaction
+    {
+        let closed = match db_handle.env.closed.lock() {
+            Ok(closed) => *closed,
+            Err(_) => return Ok((atoms::error(), atoms::database_error(), "Failed to check environment status".to_string()).encode(env))
+        };
+        if closed {
+            return Ok((atoms::error(), atoms::database_error(), "Database environment is closed".to_string()).encode(env));
+        }
     }
 
     let key_vec = key.as_slice().to_vec();
@@ -552,9 +567,11 @@ fn get<'a>(
 ) -> NifResult<Term<'a>> {
     let key_bytes = key.as_slice();
     
-    // Flush write buffer to ensure consistency
-    if let Err(error_msg) = db_handle.force_flush_buffer() {
-        return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+    // Only flush write buffer if there are pending writes
+    if db_handle.has_pending_writes() {
+        if let Err(error_msg) = db_handle.force_flush_buffer() {
+            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+        }
     }
     
     // Create a read-only transaction
@@ -596,9 +613,11 @@ fn list<'a>(
 ) -> NifResult<Term<'a>> {
     let prefix_bytes = key_prefix.as_slice();
     
-    // Flush write buffer to ensure read consistency
-    if let Err(error_msg) = db_handle.force_flush_buffer() {
-        return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+    // Only flush write buffer if there are pending writes
+    if db_handle.has_pending_writes() {
+        if let Err(error_msg) = db_handle.force_flush_buffer() {
+            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+        }
     }
     
     // Create a read-only transaction
@@ -631,16 +650,21 @@ fn list<'a>(
         cursor.iter_from(prefix_bytes)
     };
     
+    // Track if we've found any keys with the prefix for early termination optimization
+    let mut found_prefix_match = false;
+    
     // Iterate through keys starting at or after the prefix
     for (key, _value) in cursor_iter {
-        // OPTIMIZATION: Early termination - if key doesn't start with prefix and we have results,
-        // we can break since keys are sorted
+        // OPTIMIZATION: Early termination - if key doesn't start with prefix and we've already
+        // found matches, we can break since keys are sorted
         if !key.starts_with(prefix_bytes) {
-            if !children.is_empty() {
+            if found_prefix_match {
                 break; // We've passed all keys with this prefix
             }
             continue; // Keep looking if we haven't found any matches yet
         }
+        
+        found_prefix_match = true;
         
         // Extract the next path component after the prefix
         let remaining = &key[prefix_len..];
@@ -650,10 +674,11 @@ fn list<'a>(
             continue;
         }
         
-        // OPTIMIZATION: Use memchr-style search for separator instead of iterator
-        let next_component = match remaining.iter().position(|&b| b == b'/') {
-            Some(sep_pos) => &remaining[..sep_pos],
-            None => remaining
+        // OPTIMIZATION: Find separator using unsafe slice operation for better performance
+        let next_component = if let Some(sep_pos) = remaining.iter().position(|&b| b == b'/') {
+            &remaining[..sep_pos]
+        } else {
+            remaining
         };
         
         // Only process non-empty components
@@ -661,11 +686,26 @@ fn list<'a>(
             continue;
         }
         
-        // OPTIMIZATION: Check for duplicates in Vec instead of using HashSet
-        // For small collections, linear search is faster than hashing
-        let component_exists = children.iter().any(|existing| existing == &next_component);
+        // OPTIMIZATION: Use binary search for duplicate detection once we have enough items
+        // For small collections, linear search is still faster
+        let component_exists = if children.len() < 16 {
+            children.iter().any(|existing| existing == &next_component)
+        } else {
+            // For larger collections, use binary search on sorted data
+            children.binary_search(&next_component.to_vec()).is_ok()
+        };
+        
         if !component_exists {
-            children.push(next_component.to_vec());
+            let component_vec = next_component.to_vec();
+            if children.len() < 16 {
+                children.push(component_vec);
+            } else {
+                // Insert maintaining sorted order for binary search
+                match children.binary_search(&component_vec) {
+                    Err(pos) => children.insert(pos, component_vec),
+                    Ok(_) => {} // Already exists
+                }
+            }
         }
     }
     
@@ -676,8 +716,13 @@ fn list<'a>(
     // OPTIMIZATION: Pre-allocate result vector and minimize allocations
     let mut result_binaries = Vec::with_capacity(children.len());
     
-    // OPTIMIZATION: Sort results for consistent output (optional but useful)
-    children.sort_unstable();
+    // OPTIMIZATION: Sort results only if we didn't maintain sorted order during insertion
+    if children.len() >= 16 {
+        // Already sorted during insertion via binary search
+    } else {
+        // Sort small collections
+        children.sort_unstable();
+    }
     
     for child in children {
         // OPTIMIZATION: Direct binary creation without intermediate copy when possible

@@ -873,4 +873,124 @@ fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<T
     Ok((atoms::ok(), closed, ref_count, env_handle.path.clone()).encode(env))
 }
 
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);
+///===================================================================
+/// Reset Operations - Clean slate for database
+///===================================================================
+
+#[rustler::nif]
+fn reset<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResult<Term<'a>> {
+    let path_string = if let Ok(binary) = path.decode::<Binary>() {
+        std::str::from_utf8(&binary).map_err(|_| Error::BadArg)?.to_string()
+    } else if let Ok(string) = path.decode::<String>() {
+        string
+    } else if let Ok(chars) = path.decode::<Vec<u8>>() {
+        std::str::from_utf8(&chars).map_err(|_| Error::BadArg)?.to_string()
+    } else {
+        return Err(Error::BadArg);
+    };
+    let path_str = &path_string;
+    
+    // Step 1: Force close any existing environment and databases
+    {
+        let mut environments = ENVIRONMENTS.lock().unwrap();
+        if let Some(env_handle) = environments.get(path_str) {
+            // Mark as closed regardless of reference count
+            let mut closed = env_handle.closed.lock().map_err(|_| Error::BadArg)?;
+            *closed = true;
+            drop(closed);
+            
+            // Remove from map
+            environments.remove(path_str);
+        }
+    }
+    
+    // Step 2: Remove the database files
+    // LMDB creates data.mdb and lock.mdb files in the directory
+    let db_path = Path::new(path_str);
+    if db_path.exists() {
+        // Remove data.mdb if it exists
+        let data_file = db_path.join("data.mdb");
+        if data_file.exists() {
+            std::fs::remove_file(&data_file)
+                .map_err(|e| Error::Term(Box::new(format!("Failed to remove data.mdb: {:?}", e))))?;
+        }
+        
+        // Remove lock.mdb if it exists
+        let lock_file = db_path.join("lock.mdb");
+        if lock_file.exists() {
+            std::fs::remove_file(&lock_file)
+                .map_err(|e| Error::Term(Box::new(format!("Failed to remove lock.mdb: {:?}", e))))?;
+        }
+    }
+    
+    // Step 3: Reopen the environment with the same options
+    let parsed_options = parse_env_options(options)?;
+    
+    // Create LMDB environment builder
+    let mut env_builder = Environment::new();
+    
+    // Set map size if provided
+    if let Some(map_size) = parsed_options.map_size {
+        env_builder.set_map_size(map_size as usize);
+    } else {
+        // Default to 1GB if no map size is specified
+        env_builder.set_map_size(1024 * 1024 * 1024);
+    }
+    
+    // Set flags based on options
+    let mut flags = EnvironmentFlags::empty();
+    if parsed_options.no_mem_init {
+        flags |= EnvironmentFlags::NO_MEM_INIT;
+    }
+    if parsed_options.no_sync {
+        flags |= EnvironmentFlags::NO_SYNC;
+    }
+    if parsed_options.write_map {
+        flags |= EnvironmentFlags::WRITE_MAP;
+    }
+    
+    env_builder.set_flags(flags);
+    
+    // Open the environment
+    let lmdb_environment = env_builder.open(Path::new(path_str))
+        .map_err(|_| Error::Term(Box::new("Failed to reopen environment after reset")))?;
+    
+    // Create our wrapper struct
+    let lmdb_env = LmdbEnv { 
+        env: lmdb_environment,
+        path: path_str.to_string(),
+        closed: Arc::new(Mutex::new(false)),
+        ref_count: Arc::new(Mutex::new(0)),
+    };
+    let env_resource = ResourceArc::new(lmdb_env);
+    
+    // Store in global environments map
+    {
+        let mut environments = ENVIRONMENTS.lock().unwrap();
+        environments.insert(path_str.to_string(), env_resource.clone());
+    }
+    
+    // Step 4: Create a fresh database
+    let database = env_resource.env.create_db(None, DatabaseFlags::empty())
+        .map_err(|_| Error::Term(Box::new("Failed to create database after reset")))?;
+    
+    // Increment reference count for this environment
+    {
+        let mut ref_count = env_resource.ref_count.lock().map_err(|_| Error::BadArg)?;
+        *ref_count += 1;
+    }
+    
+    // Create database resource with write buffer
+    let lmdb_db = LmdbDatabase { 
+        db: database,
+        env: env_resource.clone(),
+        write_buffer: Arc::new(Mutex::new(WriteBuffer::new(1000))),
+        closed: Arc::new(Mutex::new(false)),
+    };
+    let db_resource = ResourceArc::new(lmdb_db);
+    
+    // Return both the environment and database resources
+    Ok((atoms::ok(), env_resource, db_resource).encode(env))
+}
+
+rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status, reset], load = init);

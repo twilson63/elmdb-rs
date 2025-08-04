@@ -12,7 +12,7 @@
 -export([env_open/2, env_close/1, env_close_by_name/1, env_force_close/1, env_force_close_by_name/1, env_status/1]).
 
 %% Database operations
--export([db_open/2, db_close/1]).
+-export([db_open/2, db_close/1, reset/2]).
 
 %% Key-value operations
 -export([put/3, put_batch/2, get/2, flush/1]).
@@ -170,4 +170,17 @@ list(_DBInstance, _Key) ->
 %% @returns ok on success
 -spec flush(DBInstance :: term()) -> ok | {error, database_error | transaction_error, binary()}.
 flush(_DBInstance) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Reset Operations
+%%%===================================================================
+
+%% @doc Reset a database by closing it, removing files, and recreating it fresh
+%% @param Path Directory path for the database files
+%% @param Options Configuration options (same as env_open)
+%% @returns {ok, Env, DBInstance} where Env is environment handle and DBInstance is database handle
+-spec reset(Path :: binary() | string(), Options :: list()) -> 
+    {ok, term(), term()} | {error, term()}.
+reset(_Path, _Options) ->
     erlang:nif_error(nif_not_loaded).

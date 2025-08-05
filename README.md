@@ -2,26 +2,6 @@
 
 A high-performance Erlang NIF (Native Implemented Function) for LMDB (Lightning Memory-Mapped Database) written in Rust.
 
-## Project Structure
-
-```
-elmdb-rs/
-├── src/                    # Erlang source files
-│   └── elmdb.erl          # Main Erlang API module
-├── native/                 # Rust NIF implementation
-│   └── elmdb_nif/         # Rust crate for the NIF
-├── test/                   # Common Test suites
-├── test_scripts/          # Standalone test scripts
-├── benchmarks/            # Performance benchmarks
-├── docs/                  # Documentation
-│   ├── API.md            # API documentation
-│   ├── DESIGN.md         # Design documentation
-│   ├── TEST_README.md    # Testing guide
-│   └── internal/         # Internal development docs
-├── examples/              # Usage examples
-└── priv/                  # Compiled NIF libraries
-```
-
 ## Overview
 
 elmdb-rs provides fast, embedded key-value storage for Erlang and Elixir applications through LMDB - one of the fastest embedded databases available. By implementing the NIF in Rust, we achieve excellent performance while maintaining memory safety and crash resistance.

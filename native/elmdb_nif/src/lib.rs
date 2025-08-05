@@ -1,3 +1,29 @@
+//! elmdb_nif - High-performance LMDB bindings for Erlang via Rust NIF
+//!
+//! This module implements a Native Implemented Function (NIF) that provides
+//! Erlang/Elixir applications with access to LMDB (Lightning Memory-Mapped Database).
+//!
+//! # Architecture
+//!
+//! The implementation uses a two-layer architecture:
+//! - **Resource Management**: Environments and databases are managed as Erlang resources
+//! - **Write Optimization**: Batches small writes into single transactions for performance
+//!
+//! # Safety
+//!
+//! - All LMDB operations are wrapped in safe Rust abstractions
+//! - Resources are automatically cleaned up when no longer referenced
+//! - Thread-safe through Arc<Mutex<>> wrappers
+//! - Prevents use-after-close errors through validation checks
+//!
+//! # Performance
+//!
+//! Key optimizations include:
+//! - Write batching to reduce transaction overhead
+//! - Zero-copy reads through memory mapping
+//! - Efficient cursor iteration for list operations
+//! - Early termination for prefix searches
+
 use rustler::{Env, Term, NifResult, Error, Encoder, ResourceArc};
 use rustler::types::binary::Binary;
 use std::collections::{HashMap, VecDeque};
@@ -37,13 +63,17 @@ mod atoms {
     }
 }
 
-// Write buffer for batching operations
+/// Write operation to be batched
 #[derive(Debug, Clone)]
 struct WriteOperation {
     key: Vec<u8>,
     value: Vec<u8>,
 }
 
+/// Buffer for accumulating write operations before committing
+/// 
+/// This buffer improves write performance by batching multiple small
+/// writes into a single LMDB transaction, reducing overhead significantly.
 #[derive(Debug)]
 struct WriteBuffer {
     operations: VecDeque<WriteOperation>,
@@ -51,6 +81,7 @@ struct WriteBuffer {
 }
 
 impl WriteBuffer {
+    /// Create a new write buffer with specified capacity
     fn new(max_size: usize) -> Self {
         Self {
             operations: VecDeque::new(),
@@ -58,46 +89,71 @@ impl WriteBuffer {
         }
     }
 
+    /// Check if buffer has pending operations
     fn is_empty(&self) -> bool {
         self.operations.is_empty()
     }
 
+    /// Drain all operations from the buffer
     fn drain(&mut self) -> Vec<WriteOperation> {
         self.operations.drain(..).collect()
     }
 
+    /// Check if buffer has reached capacity and should be flushed
     fn should_flush(&self) -> bool {
         self.operations.len() >= self.max_size
     }
 
+    /// Add operation without checking capacity
     fn add_without_check(&mut self, key: Vec<u8>, value: Vec<u8>) {
         self.operations.push_back(WriteOperation { key, value });
     }
 }
 
-// Resource types for LMDB handles
+/// LMDB Environment resource
+/// 
+/// Represents an LMDB environment that can contain multiple databases.
+/// Environments are reference-counted and shared across database instances.
 #[derive(Debug)]
 pub struct LmdbEnv {
+    /// The underlying LMDB environment
     env: Environment,
+    /// Path to the database directory
     path: String,
+    /// Flag indicating if environment has been closed
     closed: Arc<Mutex<bool>>,
-    ref_count: Arc<Mutex<usize>>,  // Track how many databases are using this env
+    /// Reference count for active databases using this environment
+    ref_count: Arc<Mutex<usize>>,
 }
 
+/// LMDB Database resource
+/// 
+/// Represents a database within an LMDB environment.
+/// Each database has its own write buffer for batching operations.
 pub struct LmdbDatabase {
+    /// The underlying LMDB database
     db: Database,
+    /// Reference to the parent environment
     env: ResourceArc<LmdbEnv>,
+    /// Buffer for batching write operations
     write_buffer: Arc<Mutex<WriteBuffer>>,
+    /// Flag indicating if database has been closed
     closed: Arc<Mutex<bool>>,
 }
 
-// Global state for managing environments (singleton pattern)
+/// Global registry of open environments
+/// 
+/// Ensures that each directory path has at most one environment open,
+/// preventing LMDB conflicts and improving resource sharing.
 lazy_static::lazy_static! {
     static ref ENVIRONMENTS: Arc<Mutex<HashMap<String, ResourceArc<LmdbEnv>>>> = 
         Arc::new(Mutex::new(HashMap::new()));
 }
 
-// Initialize NIF
+/// Initialize the NIF module
+/// 
+/// Registers resource types with the Erlang runtime.
+/// This function is called automatically when the NIF is loaded.
 fn init(env: Env, _info: Term) -> bool {
     rustler::resource!(LmdbEnv, env);
     rustler::resource!(LmdbDatabase, env);

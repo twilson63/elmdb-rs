@@ -20,6 +20,9 @@
 %% List operations
 -export([list/2]).
 
+%% Debug operations
+-export([count_keys/1, debug_db_state/1]).
+
 %% NIF loading
 -export([init/0]).
 
@@ -32,18 +35,33 @@
 %% @doc Initialize and load the NIF library
 -spec init() -> ok | {error, term()}.
 init() ->
-    SoName = case code:priv_dir(?MODULE) of
+    PrivDir = case code:priv_dir(?MODULE) of
         {error, bad_name} ->
             case filelib:is_dir(filename:join(["..", priv])) of
-                true ->
-                    filename:join(["..", priv, elmdb_nif]);
-                _ ->
-                    filename:join([priv, elmdb_nif])
+                true -> filename:join(["..", priv]);
+                _ -> priv
             end;
         Dir ->
-            filename:join(Dir, elmdb_nif)
+            Dir
     end,
-    erlang:load_nif(SoName, 0).
+    % Try different library names based on OS
+    LibNames = case os:type() of
+        {unix, darwin} -> ["libelmdb_nif", "elmdb_nif"];
+        {unix, _} -> ["libelmdb_nif", "elmdb_nif"];
+        _ -> ["elmdb_nif"]
+    end,
+    load_nif_from_list(PrivDir, LibNames).
+
+load_nif_from_list(_PrivDir, []) ->
+    {error, {load_failed, "Failed to load NIF library: no suitable library found"}};
+load_nif_from_list(PrivDir, [LibName | Rest]) ->
+    SoName = filename:join([PrivDir, LibName]),
+    case erlang:load_nif(SoName, 0) of
+        ok -> ok;
+        {error, {reload, _}} -> ok;
+        {error, _Reason} -> 
+            load_nif_from_list(PrivDir, Rest)
+    end.
 
 %%%===================================================================
 %%% Environment Management
@@ -57,6 +75,12 @@ init() ->
 %%   - no_sync: Don't flush system buffers to disk when committing
 %%   - write_map: Use a writeable memory map for better performance
 %% @returns {ok, Env} where Env is an opaque environment handle
+%%          {error, directory_not_found} if the directory doesn't exist
+%%          {error, permission_denied} if lacking permissions
+%%          {error, already_open} if environment is already open
+%%          {error, no_space} if disk is full
+%%          {error, corrupted} if database is corrupted
+%%          {error, ErrorAtom} for other errors
 -spec env_open(Path :: binary() | string(), Options :: list()) -> 
     {ok, term()} | {error, term()}.
 env_open(_Path, _Options) ->
@@ -95,6 +119,16 @@ env_force_close_by_name(_Path) ->
 %% @returns {ok, Closed, RefCount, Path} where Closed is boolean, RefCount is integer
 -spec env_status(Env :: term()) -> {ok, boolean(), integer(), string()}.
 env_status(_Env) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Count total keys in database (debug function)
+-spec count_keys(DB :: term()) -> {ok, integer()} | {error, term()}.
+count_keys(_DB) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Debug database state (debug function)
+-spec debug_db_state(DB :: term()) -> {ok, string()} | {error, term()}.
+debug_db_state(_DB) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

@@ -27,6 +27,13 @@ mod atoms {
         key_exist,
         map_full,
         txn_full,
+        // Specific environment errors
+        directory_not_found,
+        no_space,
+        io_error,
+        corrupted,
+        version_mismatch,
+        map_resized,
     }
 }
 
@@ -154,8 +161,39 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
     
     let lmdb_environment = match lmdb_env_result {
         Ok(env) => env,
-        Err(_) => {
-            return Ok((atoms::error(), atoms::environment_error()).encode(env));
+        Err(e) => {
+            // Check if the directory itself exists
+            let path = Path::new(path_str);
+            
+            let error_atom = if !path.exists() {
+                atoms::directory_not_found()
+            } else if path.is_file() {
+                // Path exists but is a file, not a directory
+                atoms::invalid_path()
+            } else {
+                // Directory exists, check permissions
+                match std::fs::File::create(path.join(".lmdb_test")) {
+                    Ok(_) => {
+                        // Clean up test file
+                        let _ = std::fs::remove_file(path.join(".lmdb_test"));
+                        // Permission is OK, must be another LMDB error
+                        match e {
+                            lmdb::Error::Corrupted => atoms::corrupted(),
+                            lmdb::Error::VersionMismatch => atoms::version_mismatch(),
+                            lmdb::Error::MapFull => atoms::map_full(),
+                            _ => atoms::environment_error()
+                        }
+                    },
+                    Err(io_err) => {
+                        match io_err.kind() {
+                            std::io::ErrorKind::PermissionDenied => atoms::permission_denied(),
+                            _ => atoms::environment_error()
+                        }
+                    }
+                }
+            };
+            
+            return Ok((atoms::error(), error_atom).encode(env));
         }
     };
     
@@ -375,9 +413,14 @@ fn db_open<'a>(
     // Open the database using the environment with flags
     // Use None for the default (unnamed) database
     let database_result = if parsed_options.create {
+        // Always use create_db for consistency - it will open existing or create new
         env_handle.env.create_db(None, flags)
     } else {
-        env_handle.env.open_db(None)
+        // Try create_db first, fall back to open_db if needed
+        match env_handle.env.create_db(None, flags) {
+            Ok(db) => Ok(db),
+            Err(_) => env_handle.env.open_db(None)
+        }
     };
     
     let database = match database_result {
@@ -777,27 +820,26 @@ fn list<'a>(
     let mut children = Vec::with_capacity(64);
     let prefix_len = prefix_bytes.len();
     
-    // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
-    // This dramatically reduces iterations for sparse data
-    let cursor_iter = if prefix_bytes.is_empty() {
-        cursor.iter_start()
-    } else {
-        // Position cursor at or after the prefix
-        cursor.iter_from(prefix_bytes)
-    };
-    
     // Track if we've found any keys with the prefix for early termination optimization
     let mut found_prefix_match = false;
+    
+    // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
+    // This dramatically reduces iterations for sparse data
+    
+    // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
+    // This dramatically reduces iterations for sparse data
+    // Note: iter_start() and iter() can panic on empty databases in lmdb crate
+    // We use iter_from with empty slice which handles empty databases gracefully
+    let cursor_iter = cursor.iter_from(prefix_bytes);
     
     // Iterate through keys starting at or after the prefix
     for (key, _value) in cursor_iter {
         // OPTIMIZATION: Early termination - if key doesn't start with prefix and we've already
         // found matches, we can break since keys are sorted
         if !key.starts_with(prefix_bytes) {
-            if found_prefix_match {
-                break; // We've passed all keys with this prefix
-            }
-            continue; // Keep looking if we haven't found any matches yet
+            // Since keys are sorted, if the first key doesn't match our prefix,
+            // no subsequent keys will match either
+            break;
         }
         
         found_prefix_match = true;
@@ -825,7 +867,7 @@ fn list<'a>(
         // OPTIMIZATION: Use binary search for duplicate detection once we have enough items
         // For small collections, linear search is still faster
         let component_exists = if children.len() < 16 {
-            children.iter().any(|existing| existing == &next_component)
+            children.iter().any(|existing: &Vec<u8>| existing.as_slice() == next_component)
         } else {
             // For larger collections, use binary search on sorted data
             children.binary_search(&next_component.to_vec()).is_ok()
@@ -973,4 +1015,109 @@ fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<T
     Ok((atoms::ok(), closed, ref_count, env_handle.path.clone()).encode(env))
 }
 
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);
+// Debug function to count keys
+#[rustler::nif]
+fn count_keys<'a>(
+    env: Env<'a>,
+    db_handle: ResourceArc<LmdbDatabase>
+) -> NifResult<Term<'a>> {
+    // Flush any pending writes
+    if db_handle.has_pending_writes() {
+        if let Err(error_msg) = db_handle.force_flush_buffer() {
+            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+        }
+    }
+    
+    // Create a read-only transaction
+    let txn = match (*db_handle).env.env.begin_ro_txn() {
+        Ok(txn) => txn,
+        Err(_) => {
+            return Ok((atoms::error(), "Failed to begin transaction").encode(env));
+        }
+    };
+    
+    // Open a cursor
+    let mut cursor = match txn.open_ro_cursor((*db_handle).db) {
+        Ok(cursor) => cursor,
+        Err(_) => {
+            return Ok((atoms::error(), "Failed to open cursor").encode(env));
+        }
+    };
+    
+    // Count keys with better debugging
+    let mut count = 0;
+    eprintln!("DEBUG count_keys: Starting cursor iteration...");
+    
+    // Try iter_start first
+    for (key, _) in cursor.iter_start() {
+        count += 1;
+        eprintln!("DEBUG count_keys: Key #{}: {:?}", count, String::from_utf8_lossy(key));
+        if count > 10 {
+            eprintln!("DEBUG count_keys: Stopping debug output after 10 keys...");
+            break;
+        }
+    }
+    
+    // If no keys found, try alternative methods
+    if count == 0 {
+        eprintln!("DEBUG count_keys: iter_start() found 0 keys, trying iter_from(&[])...");
+        for (key, _) in cursor.iter_from(&[]) {
+            count += 1;
+            eprintln!("DEBUG count_keys: Key #{} (iter_from): {:?}", count, String::from_utf8_lossy(key));
+            if count > 10 {
+                eprintln!("DEBUG count_keys: Stopping debug output after 10 keys...");
+                break;
+            }
+        }
+    }
+    
+    eprintln!("DEBUG count_keys: Total count: {}", count);
+    Ok((atoms::ok(), count).encode(env))
+}
+
+// Debug function to check database and transaction state
+#[rustler::nif]
+fn debug_db_state<'a>(
+    env: Env<'a>,
+    db_handle: ResourceArc<LmdbDatabase>
+) -> NifResult<Term<'a>> {
+    eprintln!("DEBUG: Checking database state...");
+    
+    // Flush any pending writes
+    if db_handle.has_pending_writes() {
+        eprintln!("DEBUG: Flushing pending writes...");
+        if let Err(error_msg) = db_handle.force_flush_buffer() {
+            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+        }
+    } else {
+        eprintln!("DEBUG: No pending writes");
+    }
+    
+    // Try to get database stats
+    let txn = match (*db_handle).env.env.begin_ro_txn() {
+        Ok(txn) => {
+            eprintln!("DEBUG: Successfully created read transaction");
+            txn
+        },
+        Err(e) => {
+            eprintln!("DEBUG: Failed to create read transaction: {:?}", e);
+            return Ok((atoms::error(), "Failed to begin transaction").encode(env));
+        }
+    };
+    
+    // Try to get database statistics using the environment
+    match (*db_handle).env.env.stat() {
+        Ok(env_stat) => {
+            eprintln!("DEBUG: Environment stats - page_size: {}, depth: {}, entries: {}", 
+                     env_stat.page_size(), env_stat.depth(), env_stat.entries());
+            Ok((atoms::ok(), format!("page_size: {}, depth: {}, entries: {}", 
+                                   env_stat.page_size(), env_stat.depth(), env_stat.entries())).encode(env))
+        },
+        Err(e) => {
+            eprintln!("DEBUG: Failed to get environment stats: {:?}", e);
+            Ok((atoms::error(), format!("Failed to get stats: {:?}", e)).encode(env))
+        }
+    }
+}
+
+rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status, count_keys, debug_db_state], load = init);

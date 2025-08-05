@@ -20,8 +20,6 @@
 %% List operations
 -export([list/2]).
 
-%% Debug operations
--export([count_keys/1, debug_db_state/1]).
 
 %% NIF loading
 -export([init/0]).
@@ -121,15 +119,6 @@ env_force_close_by_name(_Path) ->
 env_status(_Env) ->
     erlang:nif_error(nif_not_loaded).
 
-%% @doc Count total keys in database (debug function)
--spec count_keys(DB :: term()) -> {ok, integer()} | {error, term()}.
-count_keys(_DB) ->
-    erlang:nif_error(nif_not_loaded).
-
-%% @doc Debug database state (debug function)
--spec debug_db_state(DB :: term()) -> {ok, string()} | {error, term()}.
-debug_db_state(_DB) ->
-    erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================
 %%% Database Operations

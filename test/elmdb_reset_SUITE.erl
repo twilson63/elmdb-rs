@@ -83,8 +83,7 @@ test_basic_close_reopen(Config) ->
     ok = elmdb:put(DB1, <<"key1">>, <<"value1">>),
     {ok, <<"value1">>} = elmdb:get(DB1, <<"key1">>),
     
-    % Close database first, then environment
-    ok = elmdb:db_close(DB1),
+    % Close environment
     ok = elmdb:env_close(Env1),
     
     % Wait a bit to ensure cleanup
@@ -100,11 +99,9 @@ test_basic_close_reopen(Config) ->
             case elmdb:get(DB2, <<"key1">>) of
                 {ok, <<"value1">>} -> 
                     ct:pal("SUCCESS: Data persisted across close/reopen"),
-                    ok = elmdb:db_close(DB2),
                     ok = elmdb:env_close(Env2);
                 not_found ->
                     ct:pal("WARNING: Data not found after reopen"),
-                    ok = elmdb:db_close(DB2),
                     ok = elmdb:env_close(Env2);
                 Error ->
                     ct:fail("Unexpected get result: ~p", [Error])
@@ -141,8 +138,7 @@ test_close_reopen_with_data(Config) ->
         {ok, ExpectedValue} = elmdb:get(DB1, Key)
     end, TestData),
     
-    % Close database first, then environment
-    ok = elmdb:db_close(DB1),
+    % Close environment
     ok = elmdb:env_close(Env1),
     
     % Wait for cleanup
@@ -167,7 +163,6 @@ test_close_reopen_with_data(Config) ->
                         ct:fail("Error getting key ~p: ~p", [Key, Error])
                 end
             end, TestData),
-            ok = elmdb:db_close(DB2),
             ok = elmdb:env_close(Env2);
         {error, Reason} ->
             ct:fail("Failed to open database after reopen: ~p", [Reason])
@@ -193,7 +188,6 @@ test_env_close_vs_env_close_by_name(Config) ->
     case elmdb:db_open(Env2, []) of
         {ok, DB2} ->
             {ok, <<"test_value">>} = elmdb:get(DB2, <<"test_key_close">>),
-            ok = elmdb:db_close(DB2),
             ok = elmdb:env_close(Env2);
         Error1 ->
             ct:fail("env_close method failed: ~p", [Error1])
@@ -214,7 +208,6 @@ test_env_close_vs_env_close_by_name(Config) ->
     case elmdb:db_open(Env4, []) of
         {ok, DB4} ->
             {ok, <<"test_value2">>} = elmdb:get(DB4, <<"test_key_close_by_name">>),
-            ok = elmdb:db_close(DB4),
             ok = elmdb:env_close(Env4);
         Error2 ->
             ct:fail("env_close_by_name method failed: ~p", [Error2])
@@ -240,7 +233,6 @@ test_rapid_close_reopen_cycles(Config) ->
         ok = elmdb:put(DB, Key, Value),
         {ok, Value} = elmdb:get(DB, Key),
         
-        ok = elmdb:db_close(DB),
         ok = elmdb:env_close(Env),
         
         % Very short delay to stress test cleanup
@@ -253,7 +245,6 @@ test_rapid_close_reopen_cycles(Config) ->
         {ok, FinalDB} ->
             % Check that at least the last value exists
             {ok, <<"value_5">>} = elmdb:get(FinalDB, <<"cycle_5">>),
-            ok = elmdb:db_close(FinalDB),
             ok = elmdb:env_close(FinalEnv);
         Error ->
             ct:fail("Final reopen failed after rapid cycles: ~p", [Error])
@@ -282,10 +273,7 @@ test_multiple_databases_close_reopen(Config) ->
     {ok, <<"db2_value">>} = elmdb:get(DB2, <<"db2_key">>),
     {ok, <<"db3_value">>} = elmdb:get(DB3, <<"db3_key">>),
     
-    % Close database handles first, then environment (this should invalidate all database handles)
-    ok = elmdb:db_close(DB1),
-    ok = elmdb:db_close(DB2),
-    ok = elmdb:db_close(DB3),
+    % Close environment (this should invalidate all database handles)
     ok = elmdb:env_close(Env1),
     
     timer:sleep(100),
@@ -305,8 +293,6 @@ test_multiple_databases_close_reopen(Config) ->
                     % Test cross-handle access (should work since it's the same DB)
                     {ok, <<"db3_value">>} = elmdb:get(NewDB1, <<"db3_key">>),
                     
-                    ok = elmdb:db_close(NewDB1),
-                    ok = elmdb:db_close(NewDB2),
                     ok = elmdb:env_close(Env2);
                 Error2 ->
                     ct:fail("Failed to open second DB handle after reopen: ~p", [Error2])
@@ -344,7 +330,6 @@ test_database_after_env_close_by_name(Config) ->
     {ok, NewEnv} = elmdb:env_open(TestDir, []),
     {ok, NewDB} = elmdb:db_open(NewEnv, []),
     {ok, <<"test_value">>} = elmdb:get(NewDB, <<"test_key">>),
-    ok = elmdb:db_close(NewDB),
     ok = elmdb:env_close(NewEnv).
 
 test_database_after_env_close(Config) ->
@@ -372,7 +357,6 @@ test_database_after_env_close(Config) ->
     {ok, NewEnv} = elmdb:env_open(TestDir, []),
     {ok, NewDB} = elmdb:db_open(NewEnv, []),
     {ok, <<"test_value">>} = elmdb:get(NewDB, <<"test_key">>),
-    ok = elmdb:db_close(NewDB),
     ok = elmdb:env_close(NewEnv).
 
 %%====================================================================
@@ -459,7 +443,6 @@ test_reopen_with_different_options(Config) ->
     case elmdb:db_open(Env2, []) of
         {ok, DB2} ->
             {ok, <<"test_value">>} = elmdb:get(DB2, <<"test_key">>),
-            ok = elmdb:db_close(DB2),
             ok = elmdb:env_close(Env2);
         Error ->
             ct:fail("Failed to reopen with different options: ~p", [Error])
@@ -470,7 +453,6 @@ test_reopen_with_different_options(Config) ->
     case elmdb:db_open(Env3, [create]) of
         {ok, DB3} ->
             {ok, <<"test_value">>} = elmdb:get(DB3, <<"test_key">>),
-            ok = elmdb:db_close(DB3),
             ok = elmdb:env_close(Env3);
         Error2 ->
             ct:fail("Failed to reopen with additional flags: ~p", [Error2])
@@ -608,7 +590,6 @@ test_stress_close_reopen(Config) ->
         ok = elmdb:put(DB, Key, <<"value">>),
         
         % Immediately close
-        ok = elmdb:db_close(DB),
         ok = elmdb:env_close(Env),
         
         % Very brief delay (might expose race conditions)
@@ -629,7 +610,6 @@ test_stress_close_reopen(Config) ->
             ct:fail("Error in final verification: ~p", [Error])
     end,
     
-    ok = elmdb:db_close(FinalDB),
     ok = elmdb:env_close(FinalEnv).
 
 test_database_handle_after_forced_close(Config) ->
@@ -679,7 +659,6 @@ test_database_handle_after_forced_close(Config) ->
     {ok, <<"value1">>} = elmdb:get(NewDB, <<"key1">>),
     {ok, <<"value2">>} = elmdb:get(NewDB, <<"key2">>),
     
-    ok = elmdb:db_close(NewDB),
     ok = elmdb:env_close(NewEnv).
 
 test_environment_tracking_edge_case(Config) ->

@@ -105,7 +105,6 @@ test_list_empty_database(Config) ->
     Result = elmdb:list(DB, <<"any_prefix">>),
     not_found = Result,
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -117,7 +116,6 @@ test_list_nonexistent_prefix(Config) ->
     Result = elmdb:list(DB, <<"nonexistent">>),
     not_found = Result,
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -145,7 +143,6 @@ test_list_single_level(Config) ->
     SortedExpected = lists:sort(ExpectedKeys),
     SortedExpected = SortedResults,
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -174,7 +171,6 @@ test_list_hierarchical_keys(Config) ->
         true = lists:member(ExpectedKey, UserResults)
     end, ExpectedUserKeys),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -194,7 +190,6 @@ test_list_direct_children_only(Config) ->
         true = lists:member(Key, RootResults)
     end, RootLevelKeys),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -230,7 +225,6 @@ test_list_prefix_edge_cases(Config) ->
         true = lists:member(Key, AAResults)
     end, ExpectedAAKeys),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -262,7 +256,6 @@ test_list_with_similar_prefixes(Config) ->
     % Ensure user2 is not included
     false = lists:member(<<"user2">>, User1Results),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -293,7 +286,6 @@ test_list_binary_prefixes(Config) ->
     false = lists:member(<<1,2,4>>, BinaryResults),
     false = lists:member(<<1,3>>, BinaryResults),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -320,7 +312,6 @@ test_list_root_level(Config) ->
         true = lists:member(Key, AllResults)
     end, ExpectedKeys),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -351,7 +342,6 @@ test_list_deep_hierarchy(Config) ->
         true = lists:member(Key, DeepResults)
     end, ExpectedDeepKeys),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.
 
@@ -382,6 +372,5 @@ test_list_partial_matches(Config) ->
     % "te" should not be included as it doesn't start with "test"
     false = lists:member(<<"te">>, TestResults),
     
-    ok = elmdb:db_close(DB),
     ok = elmdb:env_close(Env),
     ok.

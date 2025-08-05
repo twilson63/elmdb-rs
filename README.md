@@ -37,7 +37,7 @@ elmdb-rs provides fast, embedded key-value storage for Erlang and Elixir applica
 ### From Source
 
 ```bash
-git clone https://github.com/your-org/elmdb-rs.git
+git clone <repository-url>
 cd elmdb-rs
 make
 ```
@@ -50,7 +50,7 @@ Add to your `rebar.config`:
 
 ```erlang
 {deps, [
-    {elmdb, {git, "https://github.com/your-org/elmdb-rs.git", {branch, "main"}}}
+    {elmdb, {git, "<repository-url>", {branch, "main"}}}
 ]}.
 
 %% Required: Add rebar3_cargo plugin for Rust NIF compilation
@@ -70,7 +70,7 @@ Add to your `rebar.config`:
 
 %% Optional: Cargo build configuration
 {cargo_opts, [
-    {src_dir, "deps/elmdb/native/elmdb_nif"},
+    {src_dir, "native/elmdb_nif"},
     {cargo_args, ["--release"]}
 ]}.
 ```
@@ -89,7 +89,7 @@ cat > rebar.config << 'EOF'
 {erl_opts, [debug_info]}.
 
 {deps, [
-    {elmdb, {git, "https://github.com/your-org/elmdb-rs.git", {branch, "main"}}}
+    {elmdb, {git, "<repository-url>", {branch, "main"}}}
 ]}.
 
 {plugins, [
@@ -106,7 +106,7 @@ cat > rebar.config << 'EOF'
 ]}.
 
 {cargo_opts, [
-    {src_dir, "deps/elmdb/native/elmdb_nif"},
+    {src_dir, "native/elmdb_nif"},
     {cargo_args, ["--release"]}
 ]}.
 
@@ -818,40 +818,38 @@ rebar3 shell
 # Ensure project is compiled first
 rebar3 compile
 
-# Run all test suites
-rebar3 ct
+# Run all tests
+rebar3 eunit
 
-# Run tests with coverage analysis
-rebar3 ct --cover
+# Run tests with verbose output
+rebar3 eunit -v
 ```
 
-#### Test Suites Overview
+#### Test Suite Overview
 
-| Test Suite | Purpose | Runtime |
-|-----------|---------|---------|
-| `elmdb_basic_SUITE` | Core functionality (put/get/list) | ~1-2 seconds |
-| `elmdb_list_SUITE` | Hierarchical operations | ~2-3 seconds |
-| `elmdb_error_SUITE` | Error handling and edge cases | ~1-2 seconds |
-| `elmdb_perf_SUITE` | Performance benchmarks | ~10-30 seconds |
-| `elmdb_final_perf_SUITE` | Optimized performance tests | ~5-15 seconds |
+The project includes a consolidated EUnit test suite (`test/elmdb_test.erl`) with comprehensive coverage:
 
-#### Running Specific Test Suites
+| Test Category | Coverage | Description |
+|--------------|----------|-------------|
+| Basic Operations | ✅ | put, get, overwrite, flush |
+| Batch Operations | ✅ | Batch puts, empty batches |
+| List Operations | ✅ | Hierarchical data, prefix listing |
+| Error Handling | ✅ | Closed DB, invalid paths, bad data |
+| Environment Management | ✅ | Open/close cycles, force close |
+| Performance | ✅ | 1000+ operations benchmark |
+
+#### Running Tests
 
 ```bash
-# Test core functionality
-rebar3 ct --suite test/elmdb_basic_SUITE
+# Run all tests
+rebar3 eunit
 
-# Test hierarchical operations
-rebar3 ct --suite test/elmdb_list_SUITE
+# Run with specific test module
+rebar3 eunit --module=elmdb_test
 
-# Test error handling
-rebar3 ct --suite test/elmdb_error_SUITE
-
-# Run performance benchmarks
-rebar3 ct --suite test/elmdb_perf_SUITE
-
-# Run optimized performance tests
-rebar3 ct --suite test/elmdb_final_perf_SUITE
+# Run benchmarks
+rebar3 shell
+> elmdb_benchmark:run().
 ```
 
 #### Using Makefile Targets
@@ -860,14 +858,11 @@ rebar3 ct --suite test/elmdb_final_perf_SUITE
 # Run all tests
 make test
 
-# Run specific test suites
-make test-basic      # Basic functionality
-make test-list       # List operations
-make test-error      # Error handling
-make test-perf       # Performance tests
+# Clean and run tests
+make clean test
 
-# Run tests with coverage
-make test-coverage
+# Run shell for interactive testing
+make shell
 ```
 
 #### Test Configuration Options

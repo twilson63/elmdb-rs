@@ -71,3 +71,18 @@ doc/man/
 ct_run.*/
 test/*.beam
 eunit.coverdata
+.eunit/
+TEST-*.xml
+
+# Debug files
+debug.log
+*.debug
+
+# Keep priv directory structure
+!priv/.gitkeep
+
+# Scripts are utilities, not part of the main build
+scripts/*.beam
+
+# Exclude lock file from git (it's application specific)
+# rebar.lock

@@ -341,74 +341,6 @@ fn env_close_by_name<'a>(env: Env<'a>, path: Term<'a>) -> NifResult<Term<'a>> {
     }
 }
 
-#[rustler::nif]
-fn env_force_close<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Term<'a>> {
-    let ref_count = {
-        let ref_count = env_handle.ref_count.lock().unwrap();
-        *ref_count
-    };
-    
-    // Mark environment as closed regardless of active references
-    {
-        let mut closed = env_handle.closed.lock().unwrap();
-        *closed = true;
-    }
-    
-    // Remove from global environments map
-    {
-        let mut environments = ENVIRONMENTS.lock().unwrap();
-        environments.remove(&env_handle.path);
-    }
-    
-    if ref_count > 0 {
-        Ok((atoms::ok(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
-    } else {
-        Ok(atoms::ok().encode(env))
-    }
-}
-
-#[rustler::nif]
-fn env_force_close_by_name<'a>(env: Env<'a>, path: Term<'a>) -> NifResult<Term<'a>> {
-    let path_string = if let Ok(binary) = path.decode::<Binary>() {
-        std::str::from_utf8(&binary).map_err(|_| Error::BadArg)?.to_string()
-    } else if let Ok(string) = path.decode::<String>() {
-        string
-    } else if let Ok(chars) = path.decode::<Vec<u8>>() {
-        // Handle Erlang strings (lists of integers)
-        std::str::from_utf8(&chars).map_err(|_| Error::BadArg)?.to_string()
-    } else {
-        return Err(Error::BadArg);
-    };
-    let path_str = &path_string;
-    
-    // Force close environment regardless of active references
-    {
-        let mut environments = ENVIRONMENTS.lock().unwrap();
-        if let Some(env_handle) = environments.get(path_str) {
-            let ref_count = {
-                let ref_count = env_handle.ref_count.lock().unwrap();
-                *ref_count
-            };
-            
-            // Mark as closed
-            let mut closed = env_handle.closed.lock().unwrap();
-            *closed = true;
-            drop(closed);
-            
-            // Remove from map
-            environments.remove(path_str);
-            
-            if ref_count > 0 {
-                Ok((atoms::ok(), format!("Forced close with {} active database references - databases may fail", ref_count)).encode(env))
-            } else {
-                Ok(atoms::ok().encode(env))
-            }
-        } else {
-            Ok((atoms::error(), atoms::not_found()).encode(env))
-        }
-    }
-}
-
 ///===================================================================
 /// Database Operations
 ///===================================================================
@@ -1072,4 +1004,4 @@ fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<T
 }
 
 
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, env_force_close, env_force_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);
+rustler::init!("elmdb", [env_open, env_close, env_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);

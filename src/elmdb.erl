@@ -9,13 +9,13 @@
 -module(elmdb).
 
 %% Environment management
--export([env_open/2, env_close/1, env_close_by_name/1, env_force_close/1, env_force_close_by_name/1, env_status/1]).
+-export([env_open/2, env_close/1, env_close_by_name/1, env_status/1]).
 
 %% Database operations
 -export([db_open/2, db_close/1]).
 
 %% Key-value operations
--export([put/3, put_batch/2, get/2, flush/1]).
+-export([put/3, get/2, flush/1]).
 
 %% List operations
 -export([list/2]).
@@ -98,20 +98,6 @@ env_close(_Env) ->
 env_close_by_name(_Path) ->
     erlang:nif_error(nif_not_loaded).
 
-%% @doc Force close an environment, even with active database references
-%% @param Env Environment handle from env_open
-%% @returns ok or {ok, Warning} if there were active references
--spec env_force_close(Env :: term()) -> ok | {ok, string()}.
-env_force_close(_Env) ->
-    erlang:nif_error(nif_not_loaded).
-
-%% @doc Force close an environment by its directory path, even with active database references
-%% @param Path Directory path of the database
-%% @returns ok or {ok, Warning} if there were active references
--spec env_force_close_by_name(Path :: binary() | string()) -> ok | {ok, string()}.
-env_force_close_by_name(_Path) ->
-    erlang:nif_error(nif_not_loaded).
-
 %% @doc Get status information about an environment
 %% @param Env Environment handle
 %% @returns {ok, Closed, RefCount, Path} where Closed is boolean, RefCount is integer
@@ -156,16 +142,6 @@ db_close(_DBInstance) ->
 put(_DBInstance, _Key, _Value) ->
     erlang:nif_error(nif_not_loaded).
 
-%% @doc Write multiple key-value pairs to the database in a single transaction
-%% @param DBInstance Database handle
-%% @param KeyValuePairs List of {Key, Value} tuples where Key and Value are binaries
-%% @returns ok on success, or {ok, SuccessCount, Errors} if some writes failed
-%% @throws {error, Type, Description} on failure
--spec put_batch(DBInstance :: term(), KeyValuePairs :: [{binary(), binary()}]) -> 
-    ok | {ok, integer(), list()} | {error, term(), binary()}.
-put_batch(_DBInstance, _KeyValuePairs) ->
-    erlang:nif_error(nif_not_loaded).
-
 %% @doc Read a value by key from the database
 %% @param DBInstance Database handle
 %% @param Key The key to read (binary)
@@ -173,6 +149,11 @@ put_batch(_DBInstance, _KeyValuePairs) ->
 -spec get(DBInstance :: term(), Key :: binary()) -> 
     {ok, binary()} | not_found.
 get(_DBInstance, _Key) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% Internal function used by put/3
+put_batch(_DBInstance, _KeyValuePairs) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

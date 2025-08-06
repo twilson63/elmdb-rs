@@ -196,7 +196,7 @@ elmdb-rs/
 ### Environment Management
 - `env_open/2` - Opens LMDB environment
 - `env_close/1` - Closes environment (checks references)
-- `env_force_close/1` - Force closes regardless of references
+- `env_close_by_name/1` - Closes environment by path
 
 ### Database Operations
 - `db_open/2` - Opens database within environment

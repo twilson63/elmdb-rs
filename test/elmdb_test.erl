@@ -70,20 +70,14 @@ batch_operations_test_() ->
      fun({_Dir, _Env, DB}) ->
          [
           ?_test(begin
-                     % Test batch put
-                     Batch = [{<<"batch1">>, <<"value1">>},
-                              {<<"batch2">>, <<"value2">>},
-                              {<<"batch3">>, <<"value3">>}],
-                     ok = elmdb:put_batch(DB, Batch),
+                     % Test multiple puts (replacing batch put)
+                     ok = elmdb:put(DB, <<"batch1">>, <<"value1">>),
+                     ok = elmdb:put(DB, <<"batch2">>, <<"value2">>),
+                     ok = elmdb:put(DB, <<"batch3">>, <<"value3">>),
                      
                      ?assertEqual({ok, <<"value1">>}, elmdb:get(DB, <<"batch1">>)),
                      ?assertEqual({ok, <<"value2">>}, elmdb:get(DB, <<"batch2">>)),
                      ?assertEqual({ok, <<"value3">>}, elmdb:get(DB, <<"batch3">>))
-                 end),
-          
-          ?_test(begin
-                     % Test empty batch
-                     ok = elmdb:put_batch(DB, [])
                  end)
          ]
      end}.
@@ -161,10 +155,10 @@ error_handling_test_() ->
             end),
      
      ?_test(begin
-                % Test invalid batch data
+                % Test invalid put data
                 {Dir, Env, DB} = setup(),
-                ?assertError(badarg, elmdb:put_batch(DB, not_a_list)),
-                ?assertError(badarg, elmdb:put_batch(DB, [{<<"k">>, <<"v">>, extra}])),
+                ?assertError(badarg, elmdb:put(DB, not_binary, <<"v">>)),
+                ?assertError(badarg, elmdb:put(DB, <<"k">>, not_binary)),
                 ok = elmdb:db_close(DB),
                 ok = elmdb:env_close(Env),
                 file:del_dir_r(Dir)
@@ -192,20 +186,17 @@ environment_test_() ->
             end),
      
      ?_test(begin
-                % Test force close
+                % Test normal close with open database
                 Dir = test_dir(),
                 file:del_dir_r(Dir),
                 filelib:ensure_dir(Dir ++ "/"),
                 
                 {ok, Env} = elmdb:env_open(Dir, []),
-                {ok, _DB} = elmdb:db_open(Env, [create]),
+                {ok, DB} = elmdb:db_open(Env, [create]),
                 
-                % Force close should work even with open database
-                Result = elmdb:env_force_close(Env),
-                case Result of
-                    ok -> ok;
-                    {ok, _Msg} -> ok
-                end,
+                % Close database before environment
+                ok = elmdb:db_close(DB),
+                ok = elmdb:env_close(Env),
                 
                 file:del_dir_r(Dir)
             end)

@@ -8,6 +8,6 @@ name = "elmdb_nif"
 crate-type = ["cdylib"]
 
 [dependencies]
-rustler = "0.29"
+rustler = { version = "0.36.2", features = ["nif_version_2_16"] }
 lmdb = "0.8"
 lazy_static = "1.4"

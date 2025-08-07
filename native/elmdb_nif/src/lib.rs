@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use lmdb::{Environment, EnvironmentFlags, Database, DatabaseFlags, Transaction, WriteFlags, Cursor};
+use lmdb_sys::ffi;
 
 // LMDB constant for cursor positioning (instead of importing lmdb-sys only for the constant). To be improved in the future.
 const MDB_SET_RANGE: u32 = 17;

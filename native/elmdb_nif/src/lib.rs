@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use lmdb::{Environment, EnvironmentFlags, Database, DatabaseFlags, Transaction, WriteFlags, Cursor};
+use lmdb_sys::ffi;
 
 mod atoms {
     rustler::atoms! {
@@ -794,7 +795,7 @@ fn list<'a>(
             return Ok((atoms::error(), atoms::transaction_error(), "Failed to begin read transaction".to_string()).encode(env));
         }
     };
-    
+
     // Open a cursor for the database
     let mut cursor = match txn.open_ro_cursor((*db_handle).db) {
         Ok(cursor) => cursor,
@@ -814,23 +815,28 @@ fn list<'a>(
     // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
     // This dramatically reduces iterations for sparse data
     
-    // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
-    // This dramatically reduces iterations for sparse data
-    // Note: iter_start() and iter() can panic on empty databases in lmdb crate
-    // We use iter_from with empty slice which handles empty databases gracefully
+    // Safe iteration approach that handles empty databases and missing prefixes
+    // First, try to position cursor at prefix using MDB_SET_RANGE to check if key exists
+    let cursor_positioned = cursor.get(Some(prefix_bytes), None, ffi::MDB_SET_RANGE).is_ok();
+    
+    if !cursor_positioned {
+        // No keys >= prefix exist, return not_found immediately
+        return Ok(atoms::not_found().encode(env));
+    }
+    
+    // Keys exist that are >= prefix, now safely use iter_from
     let cursor_iter = cursor.iter_from(prefix_bytes);
     
-    // Iterate through keys starting at or after the prefix
+    // Iterate through keys starting from the prefix
     for (key, _value) in cursor_iter {
+        
         // OPTIMIZATION: Early termination - if key doesn't start with prefix and we've already
         // found matches, we can break since keys are sorted
         if !key.starts_with(prefix_bytes) {
-            // Since keys are sorted, if the first key doesn't match our prefix,
+            // Since keys are sorted, if this key doesn't match our prefix,
             // no subsequent keys will match either
             break;
         }
-        
-        found_prefix_match = true;
         
         // Extract the next path component after the prefix
         let remaining = &key[prefix_len..];

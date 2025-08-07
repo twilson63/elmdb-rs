@@ -31,6 +31,9 @@ use std::sync::{Arc, Mutex};
 use std::path::Path;
 use lmdb::{Environment, EnvironmentFlags, Database, DatabaseFlags, Transaction, WriteFlags, Cursor};
 
+// LMDB constant for cursor positioning (instead of importing lmdb-sys only for the constant). To be improved in the future.
+const MDB_SET_RANGE: u32 = 17;
+
 mod atoms {
     rustler::atoms! {
         ok,
@@ -141,10 +144,10 @@ pub struct LmdbDatabase {
     closed: Arc<Mutex<bool>>,
 }
 
-/// Global registry of open environments
-/// 
-/// Ensures that each directory path has at most one environment open,
-/// preventing LMDB conflicts and improving resource sharing.
+// Global registry of open environments
+// 
+// Ensures that each directory path has at most one environment open,
+// preventing LMDB conflicts and improving resource sharing.
 lazy_static::lazy_static! {
     static ref ENVIRONMENTS: Arc<Mutex<HashMap<String, ResourceArc<LmdbEnv>>>> = 
         Arc::new(Mutex::new(HashMap::new()));
@@ -155,9 +158,7 @@ lazy_static::lazy_static! {
 /// Registers resource types with the Erlang runtime.
 /// This function is called automatically when the NIF is loaded.
 fn init(env: Env, _info: Term) -> bool {
-    rustler::resource!(LmdbEnv, env);
-    rustler::resource!(LmdbDatabase, env);
-    true
+    rustler::resource!(LmdbEnv, env) && rustler::resource!(LmdbDatabase, env)
 }
 
 ///===================================================================
@@ -794,7 +795,7 @@ fn list<'a>(
             return Ok((atoms::error(), atoms::transaction_error(), "Failed to begin read transaction".to_string()).encode(env));
         }
     };
-    
+
     // Open a cursor for the database
     let mut cursor = match txn.open_ro_cursor((*db_handle).db) {
         Ok(cursor) => cursor,
@@ -808,29 +809,30 @@ fn list<'a>(
     let mut children = Vec::with_capacity(64);
     let prefix_len = prefix_bytes.len();
     
-    // Track if we've found any keys with the prefix for early termination optimization
-    let mut found_prefix_match = false;
-    
     // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
     // This dramatically reduces iterations for sparse data
     
-    // OPTIMIZATION: Start cursor at prefix position instead of scanning from beginning
-    // This dramatically reduces iterations for sparse data
-    // Note: iter_start() and iter() can panic on empty databases in lmdb crate
-    // We use iter_from with empty slice which handles empty databases gracefully
+    // First, try to position cursor at prefix using MDB_SET_RANGE to check if key exists
+    let cursor_positioned = cursor.get(Some(prefix_bytes), None, MDB_SET_RANGE).is_ok();
+    
+    if !cursor_positioned {
+        // No keys >= prefix exist, return not_found immediately
+        return Ok(atoms::not_found().encode(env));
+    }
+    
+    // Keys exist that are >= prefix, now safely use iter_from
     let cursor_iter = cursor.iter_from(prefix_bytes);
     
-    // Iterate through keys starting at or after the prefix
+    // Iterate through keys starting from the prefix
     for (key, _value) in cursor_iter {
+        
         // OPTIMIZATION: Early termination - if key doesn't start with prefix and we've already
         // found matches, we can break since keys are sorted
         if !key.starts_with(prefix_bytes) {
-            // Since keys are sorted, if the first key doesn't match our prefix,
+            // Since keys are sorted, if this key doesn't match our prefix,
             // no subsequent keys will match either
             break;
         }
-        
-        found_prefix_match = true;
         
         // Extract the next path component after the prefix
         let remaining = &key[prefix_len..];
@@ -1003,5 +1005,7 @@ fn env_status<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<T
     Ok((atoms::ok(), closed, ref_count, env_handle.path.clone()).encode(env))
 }
 
-
-rustler::init!("elmdb", [env_open, env_close, env_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status], load = init);
+// Initialize the NIF module
+// explicit fuctions are deprecated but here is a list
+// [env_open, env_close, env_close_by_name, db_open, db_close, put, put_batch, get, list, flush, env_status]
+rustler::init!("elmdb", load = init);

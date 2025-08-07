@@ -229,3 +229,203 @@ performance_test_() ->
                 
                 cleanup({Dir, Env, DB})
             end)}.
+
+%%%===================================================================
+%%% Environment Copy Test
+%%%===================================================================
+
+environment_copy_test_() ->
+    [
+     {timeout, 120,
+      ?_test(begin
+                 % Test 1: Basic environment copy with 100k keys
+                 % Create source environment and database
+                 SourceDir = "/tmp/foo-db",
+                 TargetDir = "/tmp/bar-db",
+                 
+                 % Clean up directories if they exist
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir),
+                 filelib:ensure_dir(SourceDir ++ "/"),
+                 
+                 % Open source environment with sufficient map size for 100k keys
+                 {ok, SourceEnv} = elmdb:env_open(SourceDir, [{map_size, 104857600}]), % 100MB
+                 {ok, SourceDB} = elmdb:db_open(SourceEnv, [create]),
+                 
+                 % Write 100k key-value pairs
+                 WriteStart = erlang:monotonic_time(millisecond),
+                 lists:foreach(fun(I) ->
+                     Key = iolist_to_binary([<<"test_key_">>, integer_to_binary(I)]),
+                     Value = iolist_to_binary([<<"test_value_">>, integer_to_binary(I), <<"_data">>]),
+                     ok = elmdb:put(SourceDB, Key, Value)
+                 end, lists:seq(1, 100000)),
+                 
+                 % Flush to ensure all data is written
+                 ok = elmdb:flush(SourceDB),
+                 
+                 WriteTime = erlang:monotonic_time(millisecond) - WriteStart,
+                 ?debugFmt("Wrote 100k keys in ~p ms", [WriteTime]),
+                 
+                 % Verify some keys before closing
+                 ?assertEqual({ok, <<"test_value_1_data">>}, elmdb:get(SourceDB, <<"test_key_1">>)),
+                 ?assertEqual({ok, <<"test_value_50000_data">>}, elmdb:get(SourceDB, <<"test_key_50000">>)),
+                 ?assertEqual({ok, <<"test_value_100000_data">>}, elmdb:get(SourceDB, <<"test_key_100000">>)),
+                 
+                 % Close the source database and environment
+                 ok = elmdb:db_close(SourceDB),
+                 ok = elmdb:env_close(SourceEnv),
+                 
+                 % Copy the database files to target directory
+                 CopyStart = erlang:monotonic_time(millisecond),
+                 filelib:ensure_dir(TargetDir ++ "/"),
+                 
+                 % Copy the LMDB data file
+                 {ok, _} = file:copy(SourceDir ++ "/data.mdb", TargetDir ++ "/data.mdb"),
+                 % Copy the LMDB lock file  
+                 {ok, _} = file:copy(SourceDir ++ "/lock.mdb", TargetDir ++ "/lock.mdb"),
+                 
+                 CopyTime = erlang:monotonic_time(millisecond) - CopyStart,
+                 ?debugFmt("Copied database in ~p ms", [CopyTime]),
+                 
+                 % Verify files exist in target directory
+                 ?assert(filelib:is_regular(TargetDir ++ "/data.mdb")),
+                 ?assert(filelib:is_regular(TargetDir ++ "/lock.mdb")),
+                 
+                 % Open the target environment  
+                 {ok, TargetEnv} = elmdb:env_open(TargetDir, [{map_size, 104857600}]),
+                 {ok, TargetDB} = elmdb:db_open(TargetEnv, []),
+                 
+                 % Read and verify all 100k keys
+                 ReadStart = erlang:monotonic_time(millisecond),
+                 lists:foreach(fun(I) ->
+                     Key = iolist_to_binary([<<"test_key_">>, integer_to_binary(I)]),
+                     ExpectedValue = iolist_to_binary([<<"test_value_">>, integer_to_binary(I), <<"_data">>]),
+                     ?assertEqual({ok, ExpectedValue}, elmdb:get(TargetDB, Key))
+                 end, lists:seq(1, 100000)),
+                 
+                 ReadTime = erlang:monotonic_time(millisecond) - ReadStart,
+                 ?debugFmt("Read and verified 100k keys in ~p ms", [ReadTime]),
+                 
+                 % Test that we can write new data to the copied database
+                 ok = elmdb:put(TargetDB, <<"new_key">>, <<"new_value">>),
+                 ?assertEqual({ok, <<"new_value">>}, elmdb:get(TargetDB, <<"new_key">>)),
+                 
+                 % Clean up
+                 ok = elmdb:db_close(TargetDB),
+                 ok = elmdb:env_close(TargetEnv),
+                 
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir),
+                 
+                 ?debugFmt("Environment copy test completed successfully", [])
+             end)},
+     
+     {timeout, 30,
+      ?_test(begin
+                 % Test 2: Copy empty database
+                 SourceDir = "/tmp/empty-source-db",
+                 TargetDir = "/tmp/empty-target-db",
+                 
+                 % Clean up and create source
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir),
+                 filelib:ensure_dir(SourceDir ++ "/"),
+                 
+                 % Create empty database
+                 {ok, SourceEnv} = elmdb:env_open(SourceDir, [{map_size, 10485760}]),
+                 {ok, SourceDB} = elmdb:db_open(SourceEnv, [create]),
+                 
+                 % Close without writing any data
+                 ok = elmdb:db_close(SourceDB),
+                 ok = elmdb:env_close(SourceEnv),
+                 
+                 % Copy the empty database
+                 filelib:ensure_dir(TargetDir ++ "/"),
+                 {ok, _} = file:copy(SourceDir ++ "/data.mdb", TargetDir ++ "/data.mdb"),
+                 {ok, _} = file:copy(SourceDir ++ "/lock.mdb", TargetDir ++ "/lock.mdb"),
+                 
+                 % Open and verify copied empty database
+                 {ok, TargetEnv} = elmdb:env_open(TargetDir, [{map_size, 10485760}]),
+                 {ok, TargetDB} = elmdb:db_open(TargetEnv, []),
+                 
+                 % Verify it's empty
+                 ?assertEqual(not_found, elmdb:get(TargetDB, <<"any_key">>)),
+                 
+                 % Verify we can write to it
+                 ok = elmdb:put(TargetDB, <<"test">>, <<"data">>),
+                 ?assertEqual({ok, <<"data">>}, elmdb:get(TargetDB, <<"test">>)),
+                 
+                 % Clean up
+                 ok = elmdb:db_close(TargetDB),
+                 ok = elmdb:env_close(TargetEnv),
+                 
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir),
+                 
+                 ?debugFmt("Empty database copy test completed successfully", [])
+             end)},
+     
+     {timeout, 30,
+      ?_test(begin
+                 % Test 3: Multiple copies to different locations
+                 SourceDir = "/tmp/multi-source-db",
+                 TargetDir1 = "/tmp/multi-target-db-1",
+                 TargetDir2 = "/tmp/multi-target-db-2",
+                 
+                 % Clean up
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir1),
+                 file:del_dir_r(TargetDir2),
+                 filelib:ensure_dir(SourceDir ++ "/"),
+                 
+                 % Create source with data
+                 {ok, SourceEnv} = elmdb:env_open(SourceDir, [{map_size, 10485760}]),
+                 {ok, SourceDB} = elmdb:db_open(SourceEnv, [create]),
+                 
+                 % Write test data
+                 lists:foreach(fun(I) ->
+                     Key = iolist_to_binary([<<"multi_key_">>, integer_to_binary(I)]),
+                     Value = iolist_to_binary([<<"multi_value_">>, integer_to_binary(I)]),
+                     ok = elmdb:put(SourceDB, Key, Value)
+                 end, lists:seq(1, 1000)),
+                 
+                 ok = elmdb:flush(SourceDB),
+                 ok = elmdb:db_close(SourceDB),
+                 ok = elmdb:env_close(SourceEnv),
+                 
+                 % Copy to first target
+                 filelib:ensure_dir(TargetDir1 ++ "/"),
+                 {ok, _} = file:copy(SourceDir ++ "/data.mdb", TargetDir1 ++ "/data.mdb"),
+                 {ok, _} = file:copy(SourceDir ++ "/lock.mdb", TargetDir1 ++ "/lock.mdb"),
+                 
+                 % Copy to second target
+                 filelib:ensure_dir(TargetDir2 ++ "/"),
+                 {ok, _} = file:copy(SourceDir ++ "/data.mdb", TargetDir2 ++ "/data.mdb"),
+                 {ok, _} = file:copy(SourceDir ++ "/lock.mdb", TargetDir2 ++ "/lock.mdb"),
+                 
+                 % Verify both copies
+                 {ok, TargetEnv1} = elmdb:env_open(TargetDir1, [{map_size, 10485760}]),
+                 {ok, TargetDB1} = elmdb:db_open(TargetEnv1, []),
+                 
+                 {ok, TargetEnv2} = elmdb:env_open(TargetDir2, [{map_size, 10485760}]),
+                 {ok, TargetDB2} = elmdb:db_open(TargetEnv2, []),
+                 
+                 % Verify same data in both copies
+                 ?assertEqual({ok, <<"multi_value_1">>}, elmdb:get(TargetDB1, <<"multi_key_1">>)),
+                 ?assertEqual({ok, <<"multi_value_1">>}, elmdb:get(TargetDB2, <<"multi_key_1">>)),
+                 ?assertEqual({ok, <<"multi_value_500">>}, elmdb:get(TargetDB1, <<"multi_key_500">>)),
+                 ?assertEqual({ok, <<"multi_value_500">>}, elmdb:get(TargetDB2, <<"multi_key_500">>)),
+                 
+                 % Clean up
+                 ok = elmdb:db_close(TargetDB1),
+                 ok = elmdb:env_close(TargetEnv1),
+                 ok = elmdb:db_close(TargetDB2),
+                 ok = elmdb:env_close(TargetEnv2),
+                 
+                 file:del_dir_r(SourceDir),
+                 file:del_dir_r(TargetDir1),
+                 file:del_dir_r(TargetDir2),
+                 
+                 ?debugFmt("Multiple copies test completed successfully", [])
+             end)}
+    ].

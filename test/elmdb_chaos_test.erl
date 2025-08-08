@@ -25,12 +25,21 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% Exported functions for external use
+-export([
+    run_chaos_test/0,
+    init_chaos_test/2,
+    run_chaos_operations/2,
+    cleanup_chaos_test/1,
+    report_chaos_results/1
+]).
+
 %% Test configuration
 -define(GB, 1024 * 1024 * 1024).
 -define(MB, 1024 * 1024).
 -define(TARGET_DB_SIZE, 100 * ?GB).  % 100GB target
--define(MAX_KEY_SIZE, 1024).         % Max 1KB keys
--define(MAX_VALUE_SIZE, 1024 * 100). % Max 100KB values
+-define(MAX_KEY_SIZE, 256).          % Max 256 byte keys (LMDB safe)
+-define(MAX_VALUE_SIZE, 1024 * 10).  % Max 10KB values (LMDB safe)
 -define(CHAOS_WORKERS, 50).          % Number of concurrent chaos workers
 -define(MONITOR_INTERVAL, 1000).     % Stats monitoring interval (ms)
 
@@ -192,8 +201,8 @@ start_bulk_workers(State, Count) ->
 
 bulk_worker_loop(DB, Parent) ->
     % Generate random sized key-value pairs
-    KeySize = rand:uniform(?MAX_KEY_SIZE),
-    ValueSize = rand:uniform(?MAX_VALUE_SIZE),
+    KeySize = max(1, rand:uniform(?MAX_KEY_SIZE)),
+    ValueSize = max(1, rand:uniform(?MAX_VALUE_SIZE)),
     
     Key = crypto:strong_rand_bytes(KeySize),
     Value = crypto:strong_rand_bytes(ValueSize),
@@ -202,7 +211,11 @@ bulk_worker_loop(DB, Parent) ->
     case elmdb:put(DB, Key, Value) of
         ok ->
             Parent ! {written, KeySize + ValueSize};
-        {error, _} ->
+        {error, _, _} ->
+            Parent ! {error, write_failed};
+        Error ->
+            % Log unexpected errors but continue
+            io:format("Unexpected write error: ~p~n", [Error]),
             Parent ! {error, write_failed}
     end,
     

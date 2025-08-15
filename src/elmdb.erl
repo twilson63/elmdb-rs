@@ -9,7 +9,7 @@
 -module(elmdb).
 
 %% Environment management
--export([env_open/2, env_close/1, env_close_by_name/1, env_status/1]).
+-export([env_open/2, env_sync/1, env_close/1, env_close_by_name/1, env_status/1]).
 
 %% Database operations
 -export([db_open/2, db_close/1]).
@@ -82,6 +82,13 @@ load_nif_from_list(PrivDir, [LibName | Rest]) ->
 -spec env_open(Path :: binary() | string(), Options :: list()) -> 
     {ok, term()} | {error, term()}.
 env_open(_Path, _Options) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @doc Flushes LMDB buffers to disk 
+%% @param Env Environment handle from env_open
+%% @returns ok
+-spec env_sync(Env :: term()) -> ok.
+env_sync(_Env) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Close an LMDB environment and release resources

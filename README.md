@@ -12,6 +12,7 @@ elmdb-rs provides fast, embedded key-value storage for Erlang and Elixir applica
 - **Memory Safe**: Rust's ownership system prevents memory leaks and crashes
 - **ACID Transactions**: Full transaction support with automatic rollback on errors
 - **Hierarchical Keys**: Efficient prefix-based operations for tree-like data structures
+- **Pattern Matching**: Advanced querying with multi-field pattern matching across hierarchical data
 - **Zero-Copy Reads**: Direct memory mapping for optimal read performance
 - **Concurrent Access**: Multiple readers with exclusive writers
 - **Crash Recovery**: Automatic recovery from unexpected shutdowns
@@ -20,19 +21,12 @@ elmdb-rs provides fast, embedded key-value storage for Erlang and Elixir applica
 
 ### Prerequisites
 
-**Required:**
+See the [Developer Setup](#developer-setup) section for detailed prerequisites and installation instructions.
+
+**Quick Requirements:**
 - Erlang/OTP 24+ (tested with OTP 24, 25, 26, 27)
-- Rust 1.70+ with Cargo (for building the NIF)
-- Git (for fetching dependencies)
-
-**Optional:**
-- Make (for using provided Makefile targets)
-- LMDB system library (automatically included via Cargo)
-
-**Platform Support:**
-- Linux (x86_64, ARM64)
-- macOS (Intel, Apple Silicon)
-- Windows (x86_64)
+- Rust 1.70+ with Cargo
+- Git
 
 ### From Source
 
@@ -156,6 +150,883 @@ defp deps do
 end
 ```
 
+## Developer Setup
+
+This section provides comprehensive instructions for setting up a development environment for elmdb-rs.
+
+### Prerequisites
+
+#### Required Software
+
+| Software | Minimum Version | Recommended | Installation Check |
+|----------|----------------|-------------|-------------------|
+| Erlang/OTP | 24.0 | 27.0+ | `erl -eval 'erlang:display(erlang:system_info(otp_release)), halt().' -noshell` |
+| Rust | 1.70.0 | 1.75+ | `rustc --version` |
+| Cargo | (with Rust) | Latest | `cargo --version` |
+| Git | 2.20+ | Latest | `git --version` |
+| Make | 3.81+ | 4.0+ | `make --version` |
+| Rebar3 | 3.18+ | 3.22+ | `rebar3 version` |
+
+#### Platform-Specific Setup
+
+**macOS:**
+```bash
+# Install Homebrew if not present
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install development tools
+brew install erlang rust git make rebar3
+
+# Optional: Install additional tools
+brew install watchman  # For auto-recompilation
+brew install lldb      # For debugging
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+# Update package lists
+sudo apt-get update
+
+# Install build essentials
+sudo apt-get install -y build-essential git curl
+
+# Install Erlang
+wget https://packages.erlang-solutions.com/erlang-solutions_2.0_all.deb
+sudo dpkg -i erlang-solutions_2.0_all.deb
+sudo apt-get update
+sudo apt-get install -y erlang erlang-dev
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# Install rebar3
+wget https://s3.amazonaws.com/rebar3/rebar3 -O /tmp/rebar3
+chmod +x /tmp/rebar3
+sudo mv /tmp/rebar3 /usr/local/bin/
+
+# Optional: Install debugging tools
+sudo apt-get install -y gdb valgrind
+```
+
+**Windows:**
+```powershell
+# Install Chocolatey package manager
+Set-ExecutionPolicy Bypass -Scope Process -Force
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+
+# Install development tools
+choco install erlang rust git make
+
+# Install Visual Studio Build Tools (required for Rust)
+choco install visualstudio2022buildtools
+
+# Download and install rebar3
+Invoke-WebRequest https://s3.amazonaws.com/rebar3/rebar3 -OutFile rebar3.cmd
+# Add to PATH manually
+```
+
+### Environment Setup
+
+#### 1. Clone and Initial Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/elmdb-rs.git
+cd elmdb-rs
+
+# Set up git hooks (optional but recommended)
+cp scripts/pre-commit .git/hooks/
+chmod +x .git/hooks/pre-commit
+
+# Verify environment
+make check-env  # If available, or manually check versions
+```
+
+#### 2. Environment Variables
+
+Add these to your shell configuration (`~/.bashrc`, `~/.zshrc`, etc.):
+
+```bash
+# elmdb-rs Development Environment Variables
+export ELMDB_DEV_MODE=true
+export ELMDB_TEST_DIR="/tmp/elmdb_test"
+export RUST_BACKTRACE=1  # Enable Rust backtraces
+export ERL_AFLAGS="-kernel shell_history enabled"  # Enable Erlang shell history
+
+# Optional: Performance tuning
+export CARGO_BUILD_JOBS=4  # Adjust based on CPU cores
+export MAKEFLAGS="-j4"     # Parallel make builds
+
+# Optional: Development paths
+export ELMDB_LOG_LEVEL=debug
+```
+
+#### 3. Directory Structure
+
+```
+elmdb-rs/
+├── src/                 # Erlang source files
+│   └── elmdb.erl       # Main Erlang module
+├── native/             # Rust NIF implementation
+│   └── elmdb_nif/
+│       ├── src/
+│       │   └── lib.rs  # Rust NIF implementation
+│       └── Cargo.toml  # Rust dependencies
+├── test/               # Test suites
+│   ├── elmdb_test.erl
+│   └── elmdb_benchmark.erl
+├── priv/               # Compiled NIFs (generated)
+├── _build/             # Build artifacts (generated)
+├── rebar.config        # Rebar3 configuration
+├── Makefile           # Build automation
+└── CLAUDE.md          # AI assistant instructions
+```
+
+### IDE/Editor Setup
+
+#### VS Code
+
+1. **Install Extensions:**
+```bash
+code --install-extension erlang-ls.erlang-ls
+code --install-extension rust-lang.rust-analyzer
+code --install-extension pgourlain.erlang
+code --install-extension tamasfe.even-better-toml
+```
+
+2. **Workspace Settings** (`.vscode/settings.json`):
+```json
+{
+  "rust-analyzer.cargo.buildScripts.enable": true,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "erlangLS.erlangPath": "/usr/local/bin",
+  "editor.formatOnSave": true,
+  "[erlang]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "[rust]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  },
+  "files.watcherExclude": {
+    "**/_build": true,
+    "**/target": true,
+    "**/priv/*.so": true
+  }
+}
+```
+
+3. **Launch Configuration** (`.vscode/launch.json`):
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "erlang",
+      "request": "launch",
+      "name": "Launch Erlang Shell",
+      "projectnode": "elmdb",
+      "cookie": "elmdb-dev",
+      "cwd": "${workspaceRoot}",
+      "preLaunchTask": "compile"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Rust NIF",
+      "cargo": {
+        "args": ["build", "--package=elmdb_nif"],
+        "filter": {
+          "name": "elmdb_nif",
+          "kind": "cdylib"
+        }
+      },
+      "cwd": "${workspaceFolder}/native/elmdb_nif"
+    }
+  ]
+}
+```
+
+#### IntelliJ IDEA / RustRover
+
+1. **Install Plugins:**
+   - Erlang Plugin
+   - Rust Plugin (or use RustRover)
+   - TOML Plugin
+
+2. **Project Configuration:**
+   - Mark `src` as Sources Root
+   - Mark `native/elmdb_nif/src` as Sources Root
+   - Mark `_build` as Excluded
+   - Mark `target` as Excluded
+
+3. **Run Configurations:**
+   - Erlang Application: Set module to `elmdb`
+   - Cargo Command: Set to `build --release`
+
+#### Emacs
+
+1. **Install Packages:**
+```elisp
+;; Add to ~/.emacs.d/init.el
+(require 'package)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/"))
+(package-initialize)
+
+;; Install required packages
+(package-install 'erlang)
+(package-install 'rust-mode)
+(package-install 'lsp-mode)
+(package-install 'company)
+```
+
+2. **Configuration:**
+```elisp
+;; Erlang configuration
+(setq erlang-root-dir "/usr/local/lib/erlang")
+(add-to-list 'exec-path "/usr/local/lib/erlang/bin")
+(require 'erlang-start)
+
+;; Rust configuration
+(require 'rust-mode)
+(setq rust-format-on-save t)
+(add-hook 'rust-mode-hook #'lsp)
+
+;; Project-specific settings
+(dir-locals-set-class-variables
+ 'elmdb-project
+ '((erlang-mode . ((erlang-indent-level . 4)))
+   (rust-mode . ((rust-indent-offset . 4)))))
+```
+
+#### Vim/Neovim
+
+1. **Install Plugins** (using vim-plug):
+```vim
+" Add to ~/.vimrc or ~/.config/nvim/init.vim
+call plug#begin()
+Plug 'vim-erlang/vim-erlang-runtime'
+Plug 'vim-erlang/vim-erlang-compiler'
+Plug 'vim-erlang/vim-erlang-omnicomplete'
+Plug 'rust-lang/rust.vim'
+Plug 'neoclide/coc.nvim', {'branch': 'release'}
+call plug#end()
+```
+
+2. **Configuration:**
+```vim
+" Erlang settings
+let g:erlang_folding = 1
+let erlang_show_errors = 1
+
+" Rust settings
+let g:rustfmt_autosave = 1
+let g:rust_clip_command = 'xclip -selection clipboard'
+
+" Project-specific settings
+autocmd FileType erlang setlocal shiftwidth=4 tabstop=4 expandtab
+autocmd FileType rust setlocal shiftwidth=4 tabstop=4 expandtab
+
+" CoC configuration for language servers
+let g:coc_global_extensions = ['coc-rust-analyzer', 'coc-erlang_ls']
+```
+
+### Git Workflow
+
+#### Branch Management
+
+```bash
+# Main branches
+main        # Stable release branch
+develop     # Development branch
+feat/*      # Feature branches
+fix/*       # Bug fix branches
+hotfix/*    # Production hotfixes
+release/*   # Release preparation
+
+# Create a feature branch
+git checkout -b feat/my-feature develop
+
+# Keep branch updated
+git fetch origin
+git rebase origin/develop
+
+# Push changes
+git push -u origin feat/my-feature
+```
+
+#### Commit Message Format
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `test`: Test additions or modifications
+- `perf`: Performance improvements
+- `refactor`: Code refactoring
+- `chore`: Build process or auxiliary tool changes
+
+**Example:**
+```bash
+git commit -m "feat(nif): add batch write optimization
+
+Implement write buffering with configurable batch size to improve
+bulk insert performance by 3x.
+
+Closes #123"
+```
+
+### Development Commands
+
+#### Build Commands
+
+```bash
+# Full build (recommended)
+make                    # Compile everything (Rust NIF + Erlang)
+make clean             # Clean Erlang artifacts
+make distclean         # Clean all artifacts
+
+# Targeted builds
+make rust              # Build only Rust NIF
+make erlang            # Build only Erlang code
+make test              # Run all tests
+make benchmark         # Run performance benchmarks
+
+# Development build with debug symbols
+PROFILE=dev make
+
+# Release build with optimizations
+PROFILE=release make
+
+# Platform-optimized build
+RUSTFLAGS="-C target-cpu=native" make
+```
+
+#### Shell Aliases (add to ~/.bashrc or ~/.zshrc)
+
+```bash
+# elmdb-rs development aliases
+alias emake='make clean && make'
+alias etest='rebar3 eunit'
+alias eshell='rebar3 shell'
+alias ewatch='watchman-make -p "src/**/*.erl" "native/**/*.rs" --run make'
+alias edebug='erl -pa _build/default/lib/*/ebin -config config/debug'
+
+# Quick compile and test
+ect() {
+    make clean && make && rebar3 eunit
+}
+
+# Run specific test
+etest-one() {
+    rebar3 eunit --module=$1
+}
+```
+
+#### Auto-recompilation Setup
+
+**Using watchman:**
+```bash
+# Install watchman
+brew install watchman  # macOS
+# or
+sudo apt-get install watchman  # Linux
+
+# Create watchman configuration
+cat > .watchmanconfig << EOF
+{
+  "ignore_dirs": ["_build", "target", ".git"]
+}
+EOF
+
+# Start watching
+watchman-make -p 'src/**/*.erl' 'native/**/*.rs' --run 'make'
+```
+
+**Using entr:**
+```bash
+# Install entr
+brew install entr  # macOS
+# or
+sudo apt-get install entr  # Linux
+
+# Watch and rebuild on changes
+find src native -name "*.erl" -o -name "*.rs" | entr -c make
+```
+
+**Using rebar3 auto:**
+```bash
+# Install rebar3_auto plugin
+echo '{plugins, [rebar3_auto]}.' >> ~/.config/rebar3/rebar.config
+
+# Run auto-compile
+rebar3 auto compile
+```
+
+### Debugging Setup
+
+#### Erlang Debugging
+
+1. **Using Erlang Observer:**
+```erlang
+% Start observer from shell
+observer:start().
+
+% Or start with the application
+erl -pa _build/default/lib/*/ebin -s observer
+```
+
+2. **Using Debugger:**
+```erlang
+% Start debugger
+debugger:start().
+
+% Interpret module for debugging
+int:i(elmdb).
+
+% Set breakpoint
+int:break(elmdb, 42).  % Break at line 42
+```
+
+3. **Tracing with dbg:**
+```erlang
+% Start tracer
+dbg:tracer().
+
+% Trace function calls
+dbg:p(all, c).
+dbg:tpl(elmdb, get, []).
+
+% Stop tracing
+dbg:stop().
+```
+
+4. **Using redbug (more user-friendly):**
+```bash
+# Add to rebar.config
+{deps, [{redbug, "2.0.7"}]}.
+
+# In Erlang shell
+redbug:start("elmdb:get->return").
+```
+
+#### Rust Debugging
+
+1. **Enable Debug Symbols:**
+```toml
+# In native/elmdb_nif/Cargo.toml
+[profile.dev]
+debug = true
+opt-level = 0
+
+[profile.release]
+debug = true  # Keep debug symbols even in release
+```
+
+2. **Using GDB:**
+```bash
+# Compile with debug symbols
+cd native/elmdb_nif
+cargo build
+
+# Start Erlang with GDB
+gdb --args erl -pa _build/default/lib/*/ebin
+
+# In GDB
+(gdb) break elmdb_nif::put
+(gdb) run
+(gdb) bt  # Backtrace when breakpoint hit
+```
+
+3. **Using LLDB (macOS):**
+```bash
+# Start Erlang with LLDB
+lldb -- erl -pa _build/default/lib/*/ebin
+
+# In LLDB
+(lldb) b elmdb_nif::put
+(lldb) run
+(lldb) bt  # Backtrace
+```
+
+4. **Print Debugging in Rust:**
+```rust
+// In native/elmdb_nif/src/lib.rs
+use std::eprintln;
+
+#[rustler::nif]
+fn put(env_ref: EnvRef, key: Binary, value: Binary) -> Atom {
+    eprintln!("DEBUG: put called with key len: {}", key.len());
+    // ... rest of implementation
+}
+```
+
+5. **Using Rust Analyzer:**
+```bash
+# Generate rust-analyzer configuration
+cd native/elmdb_nif
+rust-analyzer diagnostics .
+```
+
+### Code Quality Tools
+
+#### Rust Formatting and Linting
+
+1. **Setup rustfmt:**
+```toml
+# Create native/elmdb_nif/.rustfmt.toml
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Max"
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+```
+
+2. **Run formatting:**
+```bash
+cd native/elmdb_nif
+cargo fmt        # Format code
+cargo fmt --check  # Check formatting without changes
+```
+
+3. **Setup clippy:**
+```bash
+# Run clippy
+cd native/elmdb_nif
+cargo clippy -- -D warnings  # Treat warnings as errors
+cargo clippy --fix  # Auto-fix issues
+```
+
+#### Erlang Formatting and Linting
+
+1. **Setup elvis (Erlang style reviewer):**
+```erlang
+% Add to rebar.config
+{project_plugins, [rebar3_lint]}.
+
+% Create elvis.config
+[
+  {elvis, [
+    {config, [
+      #{dirs => ["src", "test"],
+        filter => "*.erl",
+        ruleset => erl_files,
+        rules => [
+          {elvis_style, line_length, #{limit => 100}},
+          {elvis_style, no_tabs},
+          {elvis_style, no_trailing_whitespace}
+        ]}
+    ]}
+  ]}
+].
+```
+
+2. **Run linting:**
+```bash
+rebar3 lint
+rebar3 as test dialyzer  # Static analysis
+```
+
+#### Pre-commit Hooks
+
+Create `.git/hooks/pre-commit`:
+```bash
+#!/bin/bash
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check Rust formatting
+echo "Checking Rust formatting..."
+cd native/elmdb_nif
+cargo fmt --check || {
+    echo "Rust code needs formatting. Run 'cargo fmt'"
+    exit 1
+}
+
+# Run Clippy
+echo "Running Clippy..."
+cargo clippy -- -D warnings || {
+    echo "Clippy found issues"
+    exit 1
+}
+
+cd ../..
+
+# Check Erlang
+echo "Checking Erlang..."
+rebar3 compile || {
+    echo "Erlang compilation failed"
+    exit 1
+}
+
+# Run tests
+echo "Running tests..."
+rebar3 eunit || {
+    echo "Tests failed"
+    exit 1
+}
+
+echo "Pre-commit checks passed!"
+```
+
+Make it executable:
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+### Development Workflows
+
+#### Feature Development Workflow
+
+```bash
+# 1. Start from updated develop branch
+git checkout develop
+git pull origin develop
+
+# 2. Create feature branch
+git checkout -b feat/my-feature
+
+# 3. Set up development environment
+make clean
+make
+
+# 4. Start development shell with auto-recompilation
+# Terminal 1: Auto-compile
+watchman-make -p "src/**/*.erl" "native/**/*.rs" --run make
+
+# Terminal 2: Erlang shell
+rebar3 shell
+
+# 5. Development cycle
+# - Write code
+# - Tests auto-compile
+# - Test in shell
+# - Write tests
+# - Run tests: rebar3 eunit
+
+# 6. Check code quality
+cargo fmt
+cargo clippy
+rebar3 lint
+rebar3 dialyzer
+
+# 7. Commit changes
+git add .
+git commit -m "feat(module): add new feature"
+
+# 8. Push and create PR
+git push -u origin feat/my-feature
+```
+
+#### Bug Fix Workflow
+
+```bash
+# 1. Create bug fix branch
+git checkout -b fix/issue-123 develop
+
+# 2. Reproduce the bug
+# Write a failing test first
+cat > test/bug_123_test.erl << 'EOF'
+-module(bug_123_test).
+-include_lib("eunit/include/eunit.hrl").
+
+reproduce_bug_test() ->
+    % Test that demonstrates the bug
+    ?assertEqual(expected, actual).
+EOF
+
+# 3. Run the failing test
+rebar3 eunit --module=bug_123_test
+
+# 4. Fix the bug
+# Edit source files
+
+# 5. Verify fix
+rebar3 eunit --module=bug_123_test
+rebar3 eunit  # Run all tests
+
+# 6. Commit with reference to issue
+git commit -m "fix(nif): prevent segfault on invalid input
+
+Fixes #123"
+```
+
+#### Performance Optimization Workflow
+
+```bash
+# 1. Establish baseline
+make benchmark > baseline.txt
+
+# 2. Profile the code
+# Erlang profiling
+erl -pa _build/default/lib/*/ebin
+> fprof:start().
+> fprof:trace([start, {procs, all}]).
+> % Run your code
+> elmdb_benchmark:run().
+> fprof:trace(stop).
+> fprof:profile().
+> fprof:analyse([totals, {dest, "profile.txt"}]).
+
+# Rust profiling (Linux)
+cd native/elmdb_nif
+cargo build --release
+perf record --call-graph=dwarf cargo test
+perf report
+
+# 3. Make optimizations
+
+# 4. Measure improvements
+make benchmark > optimized.txt
+diff baseline.txt optimized.txt
+
+# 5. Document performance gains in commit
+git commit -m "perf(nif): optimize batch writes
+
+Improved batch write performance by 40% by reducing allocations
+and using LMDB transactions more efficiently.
+
+Benchmark results:
+- Before: 50k ops/sec
+- After: 70k ops/sec"
+```
+
+### Troubleshooting
+
+#### Common Build Issues
+
+**Issue: Rust compilation fails**
+```bash
+# Solution 1: Clear Rust cache
+cd native/elmdb_nif
+cargo clean
+cargo build
+
+# Solution 2: Update Rust
+rustup update
+
+# Solution 3: Check for conflicting versions
+cargo tree | grep -i conflict
+```
+
+**Issue: NIF fails to load**
+```bash
+# Check if NIF was built
+ls -la priv/
+
+# Check architecture compatibility
+file priv/libelmdb_nif.so  # Linux
+file priv/libelmdb_nif.dylib  # macOS
+
+# Check for missing dependencies
+ldd priv/libelmdb_nif.so  # Linux
+otool -L priv/libelmdb_nif.dylib  # macOS
+
+# Rebuild with verbose output
+V=1 make
+```
+
+**Issue: Rebar3 plugin errors**
+```bash
+# Clear rebar3 cache
+rm -rf ~/.cache/rebar3
+
+# Update plugins
+rebar3 plugins upgrade rebar3_cargo
+
+# Check plugin configuration
+rebar3 report
+```
+
+#### Common Runtime Issues
+
+**Issue: Memory leaks**
+```erlang
+% Use Erlang's built-in tools
+> erlang:memory().
+> erlang:system_info(allocated_areas).
+
+% Use recon for detailed analysis
+> recon:proc_count(memory, 10).  % Top 10 memory users
+> recon_alloc:memory(used).
+```
+
+**Issue: Performance degradation**
+```erlang
+% Check for bottlenecks
+> etop:start().
+
+% Check message queues
+> recon:proc_count(message_queue_len, 10).
+
+% Check scheduler utilization
+> scheduler:utilization(1000).
+```
+
+**Issue: Crashes or segfaults**
+```bash
+# Enable core dumps
+ulimit -c unlimited
+
+# Run with Valgrind (Linux)
+valgrind --leak-check=full --track-origins=yes erl -pa _build/default/lib/*/ebin
+
+# Use AddressSanitizer (Rust)
+cd native/elmdb_nif
+RUSTFLAGS="-Z sanitizer=address" cargo +nightly build
+```
+
+#### IDE-Specific Issues
+
+**VS Code: Rust analyzer not working**
+```bash
+# Regenerate project metadata
+cd native/elmdb_nif
+cargo clean
+cargo check
+
+# Restart rust-analyzer
+# Cmd+Shift+P -> "Rust Analyzer: Restart Server"
+```
+
+**IntelliJ: Erlang modules not recognized**
+```bash
+# Rebuild project index
+# File -> Invalidate Caches and Restart
+
+# Ensure correct SDK
+# Project Structure -> SDKs -> Add Erlang SDK
+```
+
+### Additional Resources
+
+- [Erlang Documentation](https://www.erlang.org/docs)
+- [Rust Book](https://doc.rust-lang.org/book/)
+- [Rustler Documentation](https://github.com/rusterlium/rustler)
+- [LMDB Documentation](http://www.lmdb.tech/doc/)
+- [Rebar3 Documentation](https://rebar3.org/docs/)
+
+### Getting Help
+
+- **Project Issues**: [GitHub Issues](https://github.com/your-org/elmdb-rs/issues)
+- **Development Chat**: [Discord/Slack Channel]
+- **Mailing List**: [dev@elmdb-rs.org]
+
+For more detailed information about the codebase, architecture, and implementation details, see the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+
 ## Quick Start
 
 ### Basic Usage
@@ -250,6 +1121,21 @@ Retrieves a value by key.
 
 Lists direct children of a key prefix. Useful for hierarchical data structures.
 
+#### `match(DB, Patterns) -> {ok, [MatchingIDs]} | not_found | {error, Type, Description}`
+
+Matches database entries against a set of key-value patterns. Returns IDs where ALL patterns match.
+
+**Parameters:**
+- `DB`: Database handle
+- `Patterns`: List of `{KeySuffix, Value}` tuples to match against
+  - `KeySuffix` is the part after the last `/` in hierarchical keys
+  - `Value` must match exactly for a successful match
+
+**Returns:**
+- `{ok, [MatchingIDs]}`: List of binary IDs where all patterns matched
+- `not_found`: No entries matched all patterns
+- `{error, Type, Description}`: Database or transaction error
+
 **Note:** elmdb-rs uses `/` (forward slash) as the standard path separator for hierarchical keys. This enables efficient prefix-based operations and provides natural tree-like data organization.
 
 ## Examples
@@ -313,6 +1199,60 @@ ok = elmdb:put(DB, <<"index/author/alice/", DocId/binary>>, <<"">>),
 
 % Find Alice's documents
 {ok, AliceDocs} = elmdb:list(DB, <<"index/author/alice/">>).
+```
+
+### Pattern Matching Examples
+
+```erlang
+% Store user profiles with hierarchical data
+ok = elmdb:put(DB, <<"users/alice/name">>, <<"Alice Smith">>),
+ok = elmdb:put(DB, <<"users/alice/age">>, <<"30">>),
+ok = elmdb:put(DB, <<"users/alice/status">>, <<"active">>),
+
+ok = elmdb:put(DB, <<"users/bob/name">>, <<"Bob Jones">>),
+ok = elmdb:put(DB, <<"users/bob/age">>, <<"30">>),
+ok = elmdb:put(DB, <<"users/bob/status">>, <<"inactive">>),
+
+% Find all active 30-year-olds
+Patterns = [{<<"age">>, <<"30">>}, {<<"status">>, <<"active">>}],
+{ok, [<<"users/alice">>]} = elmdb:match(DB, Patterns),
+
+% Find users by name
+NamePattern = [{<<"name">>, <<"Alice Smith">>}],
+{ok, [<<"users/alice">>]} = elmdb:match(DB, NamePattern),
+
+% No matches for inactive Alice
+BadPattern = [{<<"name">>, <<"Alice Smith">>}, {<<"status">>, <<"inactive">>}],
+not_found = elmdb:match(DB, BadPattern).
+```
+
+### Advanced Pattern Matching
+
+```erlang
+% Product catalog with complex matching
+ok = elmdb:put(DB, <<"products/laptop001/name">>, <<"Gaming Laptop">>),
+ok = elmdb:put(DB, <<"products/laptop001/category">>, <<"electronics">>),
+ok = elmdb:put(DB, <<"products/laptop001/price">>, <<"1299.99">>),
+ok = elmdb:put(DB, <<"products/laptop001/stock">>, <<"5">>),
+
+ok = elmdb:put(DB, <<"products/phone001/name">>, <<"Smartphone">>),
+ok = elmdb:put(DB, <<"products/phone001/category">>, <<"electronics">>),
+ok = elmdb:put(DB, <<"products/phone001/price">>, <<"699.99">>),
+ok = elmdb:put(DB, <<"products/phone001/stock">>, <<"0">>),
+
+% Find electronics with stock
+InStockElectronics = [
+    {<<"category">>, <<"electronics">>},
+    {<<"stock">>, <<"5">>}
+],
+{ok, [<<"products/laptop001">>]} = elmdb:match(DB, InStockElectronics),
+
+% Find specific price point electronics
+PriceRange = [
+    {<<"category">>, <<"electronics">>},
+    {<<"price">>, <<"699.99">>}
+],
+{ok, [<<"products/phone001">>]} = elmdb:match(DB, PriceRange).
 ```
 
 ## Performance Considerations
@@ -631,341 +1571,27 @@ ok
 not_found
 ```
 
-## Building from Source
+## Building and Testing
 
-### Build Requirements
+For comprehensive build instructions, testing setup, and troubleshooting, see the [Developer Setup](#developer-setup) section.
 
-#### Minimum Versions
-- **Erlang/OTP**: 24.0 or higher
-  - Tested versions: 24.3, 25.3, 26.2, 27.0
-  - Required features: NIFs, term_to_binary/binary_to_term
-- **Rust**: 1.70.0 or higher
-  - Recommended: 1.75+ for best performance optimizations
-  - Required features: rustler 0.29+ compatibility
-- **Cargo**: Included with Rust installation
-- **Git**: For dependency management
+### Quick Build
 
-#### Platform-Specific Requirements
-
-**Linux:**
 ```bash
-# Ubuntu/Debian
-sudo apt-get update
-sudo apt-get install build-essential git
-
-# RHEL/CentOS/Fedora
-sudo yum groupinstall "Development Tools"
-sudo yum install git
-
-# Arch Linux
-sudo pacman -S base-devel git
-```
-
-**macOS:**
-```bash
-# Install Xcode Command Line Tools
-xcode-select --install
-
-# Or install via Homebrew
-brew install git
-```
-
-**Windows:**
-- Visual Studio Build Tools 2019+ or Visual Studio Community
-- Git for Windows
-- Windows 10 SDK (usually included with VS)
-
-#### Rust Installation
-
-**Via rustup (recommended):**
-```bash
-# Install rustup
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install specific version if needed
-rustup install 1.75.0
-rustup default 1.75.0
-
-# Verify installation
-rustc --version
-cargo --version
-```
-
-**Via package manager:**
-```bash
-# macOS with Homebrew
-brew install rust
-
-# Ubuntu/Debian (may not be latest)
-sudo apt-get install rustc cargo
-```
-
-### Development Setup
-
-#### Quick Setup
-```bash
-# Clone repository
+# Clone and build
 git clone https://github.com/your-org/elmdb-rs.git
 cd elmdb-rs
-
-# Compile everything (uses Makefile)
 make
-
-# Or compile manually
-rebar3 compile
 ```
 
-#### Manual Build Process
-```bash
-# 1. Clone repository
-git clone https://github.com/your-org/elmdb-rs.git
-cd elmdb-rs
-
-# 2. Build Rust NIF first
-cd native/elmdb_nif
-cargo build --release
-
-# 3. Build Erlang application
-cd ../..
-rebar3 compile
-
-# 4. Run tests to verify build
-rebar3 ct
-```
-
-#### Build Optimization Options
-
-**Development Build (faster compilation):**
-```bash
-cd native/elmdb_nif
-cargo build  # Uses dev profile, includes debug symbols
-```
-
-**Production Build (optimized performance):**
-```bash
-cd native/elmdb_nif
-cargo build --release  # Full optimizations
-```
-
-**Platform-Optimized Build:**
-```bash
-cd native/elmdb_nif
-cargo build --release --target-cpu=native  # CPU-specific optimizations
-```
-
-#### Troubleshooting Build Issues
-
-**Common Issues:**
-
-1. **Rust not found:**
-   ```bash
-   # Ensure Rust is in PATH
-   source ~/.cargo/env
-   # Or restart terminal after Rust installation
-   ```
-
-2. **rebar3_cargo plugin missing:**
-   ```bash
-   # Install plugin globally
-   rebar3 plugins install rebar3_cargo
-   ```
-
-3. **LMDB compilation errors:**
-   ```bash
-   # Ensure you have build tools
-   # On Ubuntu/Debian:
-   sudo apt-get install build-essential pkg-config
-   
-   # On macOS:
-   xcode-select --install
-   ```
-
-4. **Permission errors on Windows:**
-   - Run as Administrator
-   - Ensure Windows Defender allows Cargo/Rust
-
-**Clean Build:**
-```bash
-# Clean all build artifacts
-make distclean
-
-# Or manually
-rebar3 clean
-cd native/elmdb_nif && cargo clean && cd ../..
-rm -rf _build/ priv/
-```
-
-#### Build Verification
-```bash
-# Verify NIF was built correctly
-ls -la priv/
-# Should show: elmdb_nif.so (Linux), libelmdb_nif.dylib (macOS), or elmdb_nif.dll (Windows)
-
-# Test basic functionality
-rebar3 shell
-# In shell:
-# {ok, Env} = elmdb:env_open("/tmp/test", []).
-# {ok, DB} = elmdb:db_open(Env, [create]).
-# ok = elmdb:put(DB, <<"test">>, <<"works">>).
-# {ok, <<"works">>} = elmdb:get(DB, <<"test">>).
-```
-
-### Testing
-
-#### Quick Test Setup
-
-```bash
-# Ensure project is compiled first
-rebar3 compile
-
-# Run all tests
-rebar3 eunit
-
-# Run tests with verbose output
-rebar3 eunit -v
-```
-
-#### Test Suite Overview
-
-The project includes a consolidated EUnit test suite (`test/elmdb_test.erl`) with comprehensive coverage:
-
-| Test Category | Coverage | Description |
-|--------------|----------|-------------|
-| Basic Operations | ✅ | put, get, overwrite, flush |
-| Batch Operations | ✅ | Batch puts, empty batches |
-| List Operations | ✅ | Hierarchical data, prefix listing |
-| Error Handling | ✅ | Closed DB, invalid paths, bad data |
-| Environment Management | ✅ | Open/close cycles, force close |
-| Performance | ✅ | 1000+ operations benchmark |
-
-#### Running Tests
-
-```bash
-# Run all tests
-rebar3 eunit
-
-# Run with specific test module
-rebar3 eunit --module=elmdb_test
-
-# Run benchmarks
-rebar3 shell
-> elmdb_benchmark:run().
-```
-
-#### Using Makefile Targets
+### Quick Test
 
 ```bash
 # Run all tests
 make test
 
-# Clean and run tests
-make clean test
-
-# Run shell for interactive testing
-make shell
-```
-
-#### Test Configuration Options
-
-**Default Test Configuration:**
-```bash
-# Uses temporary directories and standard settings
-rebar3 ct
-```
-
-**Custom Test Database Location:**
-```bash
-# Set custom test database path
-export ELMDB_TEST_DIR="/tmp/elmdb_test_custom"
-rebar3 ct
-```
-
-**Performance Test Configuration:**
-```bash
-# Run performance tests with specific record counts
-export ELMDB_PERF_RECORDS=50000
-rebar3 ct --suite test/elmdb_perf_SUITE
-```
-
-#### Testing Your Integration
-
-**Basic Integration Test:**
-```erlang
-%% In your project's test suite
-test_elmdb_integration(_Config) ->
-    % Test basic operations
-    {ok, Env} = elmdb:env_open("/tmp/test_db", [{map_size, 104857600}]),
-    {ok, DB} = elmdb:db_open(Env, [create]),
-    
-    % Test put/get
-    ok = elmdb:put(DB, <<"test_key">>, <<"test_value">>),
-    {ok, <<"test_value">>} = elmdb:get(DB, <<"test_key">>),
-    
-    % Test hierarchical operations
-    ok = elmdb:put(DB, <<"config/db/host">>, <<"localhost">>),
-    ok = elmdb:put(DB, <<"config/db/port">>, <<"5432">>),
-    {ok, Children} = elmdb:list(DB, <<"config/db/">>),
-    2 = length(Children),
-    
-    % Cleanup
-    ok = elmdb:env_close(Env).
-```
-
-**Performance Testing Your Data:**
-```erlang
-%% Benchmark with your specific data patterns
-benchmark_my_data(_Config) ->
-    {ok, Env} = elmdb:env_open("/tmp/bench_db", [{map_size, 1073741824}]),
-    {ok, DB} = elmdb:db_open(Env, [create]),
-    
-    % Time writes
-    StartTime = erlang:system_time(microsecond),
-    lists:foreach(fun(I) ->
-        Key = <<"myapp/user/", (integer_to_binary(I))/binary>>,
-        Value = term_to_binary(#{id => I, name => <<"User", (integer_to_binary(I))/binary>>}),
-        ok = elmdb:put(DB, Key, Value)
-    end, lists:seq(1, 10000)),
-    WriteTime = erlang:system_time(microsecond) - StartTime,
-    
-    ct:print("Wrote 10,000 records in ~p microseconds (~p records/sec)",
-             [WriteTime, round(10000 * 1000000 / WriteTime)]),
-    
-    ok = elmdb:env_close(Env).
-```
-
-#### Continuous Integration Testing
-
-**GitHub Actions Example:**
-```yaml
-# .github/workflows/test.yml
-name: Test
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        otp: ['24', '25', '26', '27']
-        rust: ['1.70', '1.75', 'stable']
-    steps:
-      - uses: actions/checkout@v3
-      - uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ matrix.otp }}
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ matrix.rust }}
-      - run: rebar3 compile
-      - run: rebar3 ct
-```
-
-**Test Environment Variables:**
-```bash
-# Control test behavior
-export ELMDB_TEST_DIR="/tmp/elmdb_ci_tests"     # Custom test directory
-export ELMDB_PERF_RECORDS=25000                 # Reduce records for CI
-export ELMDB_TEST_TIMEOUT=30000                 # Test timeout in ms
-export ELMDB_SKIP_PERF_TESTS=true              # Skip performance tests
+# Run specific test module
+rebar3 eunit --module=elmdb_test
 ```
 
 ### Examples
@@ -986,32 +1612,7 @@ We welcome contributions to elmdb-rs! Please see [CONTRIBUTING.md](CONTRIBUTING.
 - Code style and standards
 - Submitting changes
 
-### Quick Start for Contributors
-
-```bash
-# Fork and clone the repository
-git clone https://github.com/your-username/elmdb-rs.git
-cd elmdb-rs
-
-# Set up development environment
-make
-
-# Run all tests
-make test
-
-# Run performance benchmarks
-make test-perf
-
-# See CONTRIBUTING.md for detailed instructions
-```
-
-### Development Guidelines
-
-- Follow Rust and Erlang best practices
-- Add comprehensive tests for new features
-- Update documentation for API changes
-- Ensure memory safety and error handling
-- Run benchmarks for performance-critical changes
+See the [Developer Setup](#developer-setup) section for detailed contribution guidelines, development workflows, and setup instructions
 
 ## License
 

@@ -429,3 +429,224 @@ environment_copy_test_() ->
                  ?debugFmt("Multiple copies test completed successfully", [])
              end)}
     ].
+
+%%%===================================================================
+%%% Match Function Tests
+%%%===================================================================
+
+match_basic_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun({_Dir, _Env, DB}) ->
+         [
+          ?_test(begin
+                     % Setup test data with hierarchical keys
+                     ok = elmdb:put(DB, <<"users/alice/name">>, <<"Alice">>),
+                     ok = elmdb:put(DB, <<"users/alice/email">>, <<"alice@example.com">>),
+                     ok = elmdb:put(DB, <<"users/alice/age">>, <<"30">>),
+                     
+                     ok = elmdb:put(DB, <<"users/bob/name">>, <<"Bob">>),
+                     ok = elmdb:put(DB, <<"users/bob/email">>, <<"bob@example.com">>),
+                     ok = elmdb:put(DB, <<"users/bob/age">>, <<"25">>),
+                     
+                     ok = elmdb:put(DB, <<"users/charlie/name">>, <<"Charlie">>),
+                     ok = elmdb:put(DB, <<"users/charlie/email">>, <<"charlie@example.com">>),
+                     ok = elmdb:put(DB, <<"users/charlie/age">>, <<"30">>),
+                     
+                     % Test single pattern match
+                     Patterns1 = [{<<"name">>, <<"Alice">>}],
+                     {ok, Result1} = elmdb:match(DB, Patterns1),
+                     ?assertEqual([<<"users/alice">>], Result1),
+                     
+                     % Test multiple pattern match
+                     Patterns2 = [{<<"name">>, <<"Bob">>}, {<<"email">>, <<"bob@example.com">>}],
+                     {ok, Result2} = elmdb:match(DB, Patterns2),
+                     ?assertEqual([<<"users/bob">>], Result2),
+                     
+                     % Test pattern matching multiple IDs
+                     Patterns3 = [{<<"age">>, <<"30">>}],
+                     {ok, Result3} = elmdb:match(DB, Patterns3),
+                     ?assertEqual(2, length(Result3)),
+                     ?assert(lists:member(<<"users/alice">>, Result3)),
+                     ?assert(lists:member(<<"users/charlie">>, Result3)),
+                     
+                     % Test no matches
+                     Patterns4 = [{<<"name">>, <<"David">>}],
+                     ?assertEqual(not_found, elmdb:match(DB, Patterns4)),
+                     
+                     % Test partial match (not all patterns match)
+                     Patterns5 = [{<<"name">>, <<"Alice">>}, {<<"email">>, <<"wrong@example.com">>}],
+                     ?assertEqual(not_found, elmdb:match(DB, Patterns5))
+                 end)
+         ]
+     end}.
+
+match_complex_hierarchical_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun({_Dir, _Env, DB}) ->
+         [
+          ?_test(begin
+                     % Setup complex hierarchical data
+                     ok = elmdb:put(DB, <<"items/1234/type">>, <<"product">>),
+                     ok = elmdb:put(DB, <<"items/1234/status">>, <<"active">>),
+                     ok = elmdb:put(DB, <<"items/1234/price">>, <<"99.99">>),
+                     ok = elmdb:put(DB, <<"items/1234/name">>, <<"Widget">>),
+                     
+                     ok = elmdb:put(DB, <<"items/5678/type">>, <<"product">>),
+                     ok = elmdb:put(DB, <<"items/5678/status">>, <<"active">>),
+                     ok = elmdb:put(DB, <<"items/5678/price">>, <<"99.99">>),
+                     ok = elmdb:put(DB, <<"items/5678/name">>, <<"Gadget">>),
+                     
+                     ok = elmdb:put(DB, <<"items/9999/type">>, <<"service">>),
+                     ok = elmdb:put(DB, <<"items/9999/status">>, <<"active">>),
+                     ok = elmdb:put(DB, <<"items/9999/price">>, <<"99.99">>),
+                     ok = elmdb:put(DB, <<"items/9999/name">>, <<"Support">>),
+                     
+                     % Test matching products with specific price
+                     Patterns1 = [{<<"type">>, <<"product">>}, {<<"status">>, <<"active">>}, {<<"price">>, <<"99.99">>}],
+                     {ok, Result1} = elmdb:match(DB, Patterns1),
+                     ?assertEqual(2, length(Result1)),
+                     ?assert(lists:member(<<"items/1234">>, Result1)),
+                     ?assert(lists:member(<<"items/5678">>, Result1)),
+                     
+                     % Test matching specific combination
+                     Patterns2 = [{<<"type">>, <<"service">>}, {<<"name">>, <<"Support">>}],
+                     {ok, Result2} = elmdb:match(DB, Patterns2),
+                     ?assertEqual([<<"items/9999">>], Result2)
+                 end)
+         ]
+     end}.
+
+match_edge_cases_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun({_Dir, _Env, DB}) ->
+         [
+          ?_test(begin
+                     % Test empty patterns (should return not_found)
+                     ?assertEqual(not_found, elmdb:match(DB, [])),
+                     
+                     % Test with non-hierarchical keys
+                     ok = elmdb:put(DB, <<"simple_key">>, <<"simple_value">>),
+                     ok = elmdb:put(DB, <<"another_key">>, <<"another_value">>),
+                     
+                     % Empty suffix should match non-hierarchical keys
+                     Patterns1 = [{<<>>, <<"simple_value">>}],
+                     {ok, Result1} = elmdb:match(DB, Patterns1),
+                     ?assertEqual([<<"simple_key">>], Result1),
+                     
+                     % Test with duplicate patterns (should still work)
+                     ok = elmdb:put(DB, <<"test/id/field">>, <<"value">>),
+                     Patterns2 = [{<<"field">>, <<"value">>}, {<<"field">>, <<"value">>}],
+                     {ok, Result2} = elmdb:match(DB, Patterns2),
+                     ?assertEqual([<<"test/id">>], Result2),
+                     
+                     % Test with very long keys
+                     LongID = iolist_to_binary(lists:duplicate(100, "x")),
+                     LongKey = <<LongID/binary, "/field">>,
+                     ok = elmdb:put(DB, LongKey, <<"value">>),
+                     Patterns3 = [{<<"field">>, <<"value">>}],
+                     {ok, Result3} = elmdb:match(DB, Patterns3),
+                     ?assert(lists:member(LongID, Result3))
+                 end)
+         ]
+     end}.
+
+match_performance_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun({_Dir, _Env, DB}) ->
+         [
+          ?_test(begin
+                     % Create a larger dataset for performance testing
+                     lists:foreach(fun(I) ->
+                         ID = iolist_to_binary([<<"user_">>, integer_to_binary(I)]),
+                         ok = elmdb:put(DB, <<ID/binary, "/name">>, <<"Name", (integer_to_binary(I))/binary>>),
+                         ok = elmdb:put(DB, <<ID/binary, "/email">>, <<(integer_to_binary(I))/binary, "@example.com">>),
+                         ok = elmdb:put(DB, <<ID/binary, "/status">>, 
+                                       case I rem 3 of
+                                           0 -> <<"active">>;
+                                           1 -> <<"inactive">>;
+                                           2 -> <<"pending">>
+                                       end),
+                         ok = elmdb:put(DB, <<ID/binary, "/score">>, 
+                                       integer_to_binary(I rem 100))
+                     end, lists:seq(1, 1000)),
+                     
+                     ok = elmdb:flush(DB),
+                     
+                     % Test matching with multiple patterns on large dataset
+                     StartTime = erlang:monotonic_time(millisecond),
+                     Patterns = [{<<"status">>, <<"active">>}, {<<"score">>, <<"42">>}],
+                     Result = elmdb:match(DB, Patterns),
+                     EndTime = erlang:monotonic_time(millisecond),
+                     Duration = EndTime - StartTime,
+                     
+                     % Should complete within 100ms as per PRD requirement
+                     ?assert(Duration < 100),
+                     ?assertMatch({ok, _}, Result),
+                     
+                     % Verify correctness
+                     case Result of
+                         {ok, IDs} ->
+                             % Should find user_42, user_342, user_642, user_942 (all with score 42 and active status)
+                             Expected = [<<"user_42">>, <<"user_342">>, <<"user_642">>, <<"user_942">>],
+                             FoundActive = lists:filter(fun(ID) ->
+                                 case binary:split(ID, <<"_">>) of
+                                     [<<"user">>, NumBin] ->
+                                         Num = binary_to_integer(NumBin),
+                                         (Num rem 100 == 42) andalso (Num rem 3 == 0);
+                                     _ -> false
+                                 end
+                             end, IDs),
+                             ?assertEqual(length(Expected), length(FoundActive));
+                         _ ->
+                             ?assert(false)
+                     end
+                 end)
+         ]
+     end}.
+
+match_concurrent_test_() ->
+    {setup,
+     fun setup/0,
+     fun cleanup/1,
+     fun({_Dir, _Env, DB}) ->
+         [
+          ?_test(begin
+                     % Setup initial data
+                     ok = elmdb:put(DB, <<"concurrent/test/field1">>, <<"value1">>),
+                     ok = elmdb:put(DB, <<"concurrent/test/field2">>, <<"value2">>),
+                     ok = elmdb:flush(DB),
+                     
+                     % Spawn multiple processes to perform match operations concurrently
+                     Parent = self(),
+                     Workers = lists:map(fun(I) ->
+                         spawn(fun() ->
+                             Patterns = [{<<"field1">>, <<"value1">>}, {<<"field2">>, <<"value2">>}],
+                             Result = elmdb:match(DB, Patterns),
+                             Parent ! {self(), I, Result}
+                         end)
+                     end, lists:seq(1, 10)),
+                     
+                     % Collect results
+                     Results = lists:map(fun(Worker) ->
+                         receive
+                             {Worker, _I, Result} -> Result
+                         after 1000 ->
+                             timeout
+                         end
+                     end, Workers),
+                     
+                     % All concurrent matches should succeed with same result
+                     lists:foreach(fun(Result) ->
+                         ?assertEqual({ok, [<<"concurrent/test">>]}, Result)
+                     end, Results)
+                 end)
+         ]
+     end}.

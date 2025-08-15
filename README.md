@@ -12,6 +12,7 @@ elmdb-rs provides fast, embedded key-value storage for Erlang and Elixir applica
 - **Memory Safe**: Rust's ownership system prevents memory leaks and crashes
 - **ACID Transactions**: Full transaction support with automatic rollback on errors
 - **Hierarchical Keys**: Efficient prefix-based operations for tree-like data structures
+- **Pattern Matching**: Advanced querying with multi-field pattern matching across hierarchical data
 - **Zero-Copy Reads**: Direct memory mapping for optimal read performance
 - **Concurrent Access**: Multiple readers with exclusive writers
 - **Crash Recovery**: Automatic recovery from unexpected shutdowns
@@ -250,6 +251,21 @@ Retrieves a value by key.
 
 Lists direct children of a key prefix. Useful for hierarchical data structures.
 
+#### `match(DB, Patterns) -> {ok, [MatchingIDs]} | not_found | {error, Type, Description}`
+
+Matches database entries against a set of key-value patterns. Returns IDs where ALL patterns match.
+
+**Parameters:**
+- `DB`: Database handle
+- `Patterns`: List of `{KeySuffix, Value}` tuples to match against
+  - `KeySuffix` is the part after the last `/` in hierarchical keys
+  - `Value` must match exactly for a successful match
+
+**Returns:**
+- `{ok, [MatchingIDs]}`: List of binary IDs where all patterns matched
+- `not_found`: No entries matched all patterns
+- `{error, Type, Description}`: Database or transaction error
+
 **Note:** elmdb-rs uses `/` (forward slash) as the standard path separator for hierarchical keys. This enables efficient prefix-based operations and provides natural tree-like data organization.
 
 ## Examples
@@ -313,6 +329,60 @@ ok = elmdb:put(DB, <<"index/author/alice/", DocId/binary>>, <<"">>),
 
 % Find Alice's documents
 {ok, AliceDocs} = elmdb:list(DB, <<"index/author/alice/">>).
+```
+
+### Pattern Matching Examples
+
+```erlang
+% Store user profiles with hierarchical data
+ok = elmdb:put(DB, <<"users/alice/name">>, <<"Alice Smith">>),
+ok = elmdb:put(DB, <<"users/alice/age">>, <<"30">>),
+ok = elmdb:put(DB, <<"users/alice/status">>, <<"active">>),
+
+ok = elmdb:put(DB, <<"users/bob/name">>, <<"Bob Jones">>),
+ok = elmdb:put(DB, <<"users/bob/age">>, <<"30">>),
+ok = elmdb:put(DB, <<"users/bob/status">>, <<"inactive">>),
+
+% Find all active 30-year-olds
+Patterns = [{<<"age">>, <<"30">>}, {<<"status">>, <<"active">>}],
+{ok, [<<"users/alice">>]} = elmdb:match(DB, Patterns),
+
+% Find users by name
+NamePattern = [{<<"name">>, <<"Alice Smith">>}],
+{ok, [<<"users/alice">>]} = elmdb:match(DB, NamePattern),
+
+% No matches for inactive Alice
+BadPattern = [{<<"name">>, <<"Alice Smith">>}, {<<"status">>, <<"inactive">>}],
+not_found = elmdb:match(DB, BadPattern).
+```
+
+### Advanced Pattern Matching
+
+```erlang
+% Product catalog with complex matching
+ok = elmdb:put(DB, <<"products/laptop001/name">>, <<"Gaming Laptop">>),
+ok = elmdb:put(DB, <<"products/laptop001/category">>, <<"electronics">>),
+ok = elmdb:put(DB, <<"products/laptop001/price">>, <<"1299.99">>),
+ok = elmdb:put(DB, <<"products/laptop001/stock">>, <<"5">>),
+
+ok = elmdb:put(DB, <<"products/phone001/name">>, <<"Smartphone">>),
+ok = elmdb:put(DB, <<"products/phone001/category">>, <<"electronics">>),
+ok = elmdb:put(DB, <<"products/phone001/price">>, <<"699.99">>),
+ok = elmdb:put(DB, <<"products/phone001/stock">>, <<"0">>),
+
+% Find electronics with stock
+InStockElectronics = [
+    {<<"category">>, <<"electronics">>},
+    {<<"stock">>, <<"5">>}
+],
+{ok, [<<"products/laptop001">>]} = elmdb:match(DB, InStockElectronics),
+
+% Find specific price point electronics
+PriceRange = [
+    {<<"category">>, <<"electronics">>},
+    {<<"price">>, <<"699.99">>}
+],
+{ok, [<<"products/phone001">>]} = elmdb:match(DB, PriceRange).
 ```
 
 ## Performance Considerations

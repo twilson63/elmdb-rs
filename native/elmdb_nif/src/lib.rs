@@ -26,7 +26,7 @@
 
 use rustler::{Env, Term, NifResult, Error, Encoder, ResourceArc};
 use rustler::types::binary::Binary;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use lmdb::{Environment, EnvironmentFlags, Database, DatabaseFlags, Transaction, WriteFlags, Cursor};
@@ -904,6 +904,128 @@ fn list<'a>(
     }
     
     Ok((atoms::ok(), result_binaries).encode(env))
+}
+
+#[rustler::nif]
+fn match_pattern<'a>(
+    env: Env<'a>,
+    db_handle: ResourceArc<LmdbDatabase>,
+    patterns: Vec<(Binary, Binary)>
+) -> NifResult<Term<'a>> {
+    // Validate database and environment status
+    if let Err(error_msg) = db_handle.validate_database() {
+        return Ok((atoms::error(), atoms::database_error(), error_msg).encode(env));
+    }
+    
+    // Return not_found if patterns is empty
+    if patterns.is_empty() {
+        return Ok(atoms::not_found().encode(env));
+    }
+    
+    // Keep patterns as references for efficient comparison
+    let patterns_vec: Vec<(&[u8], &[u8])> = patterns
+        .iter()
+        .map(|(k, v)| (k.as_slice(), v.as_slice()))
+        .collect();
+    
+    // Only flush write buffer if there are pending writes
+    if db_handle.has_pending_writes() {
+        if let Err(error_msg) = db_handle.force_flush_buffer() {
+            return Ok((atoms::error(), atoms::transaction_error(), error_msg).encode(env));
+        }
+    }
+    
+    // Create a read-only transaction
+    let txn = match (*db_handle).env.env.begin_ro_txn() {
+        Ok(txn) => txn,
+        Err(_) => {
+            return Ok((atoms::error(), atoms::transaction_error(), "Failed to begin read transaction".to_string()).encode(env));
+        }
+    };
+    
+    // Open a cursor for the database
+    let mut cursor = match txn.open_ro_cursor((*db_handle).db) {
+        Ok(cursor) => cursor,
+        Err(_) => {
+            return Ok((atoms::error(), atoms::database_error(), "Failed to open cursor".to_string()).encode(env));
+        }
+    };
+    
+    // Data structures for tracking matches
+    const MAX_RESULTS: usize = 100000;  // Reasonable limit to prevent unbounded memory growth
+    let mut matching_ids: Vec<Vec<u8>> = Vec::new();
+    let mut current_id: Option<Vec<u8>> = None;
+    let mut seen_patterns: HashSet<usize> = HashSet::new();
+    let total_patterns = patterns_vec.len();
+    
+    // Iterate through all key-value pairs in the database
+    let iter = cursor.iter_start();
+    for item in iter {
+        let (key_bytes, value_bytes) = item;
+        
+        // Parse key to extract ID and suffix
+        // Find the position of the last '/' to extract the ID and suffix
+        let last_slash_pos = key_bytes.iter().rposition(|&b| b == b'/');
+        
+        let (id, suffix) = if let Some(pos) = last_slash_pos {
+            // Has hierarchy - split into ID and suffix
+            let id = key_bytes[..pos].to_vec();
+            let suffix = key_bytes[pos + 1..].to_vec();
+            (id, suffix)
+        } else {
+            // No hierarchy - the entire key is the ID
+            (key_bytes.to_vec(), Vec::new())
+        };
+        
+        // Check if we've moved to a new ID
+        if current_id.as_ref() != Some(&id) {
+            // Check if previous ID matched all patterns
+            if let Some(prev_id) = current_id.take() {
+                if seen_patterns.len() == total_patterns {
+                    matching_ids.push(prev_id);
+                    // Stop if we've reached the maximum number of results
+                    if matching_ids.len() >= MAX_RESULTS {
+                        break;
+                    }
+                }
+            }
+            
+            // Reset for new ID
+            current_id = Some(id.clone());
+            seen_patterns.clear();
+        }
+        
+        // Check if this key-value pair matches any pattern
+        for (pattern_idx, (pattern_key, pattern_value)) in patterns_vec.iter().enumerate() {
+            // Check if suffix matches pattern key and value matches pattern value
+            if suffix.as_slice() == *pattern_key && value_bytes == *pattern_value {
+                seen_patterns.insert(pattern_idx);
+            }
+        }
+    }
+    
+    // Check the final ID
+    if let Some(final_id) = current_id {
+        if seen_patterns.len() == total_patterns {
+            matching_ids.push(final_id);
+        }
+    }
+    
+    // Return results
+    if matching_ids.is_empty() {
+        Ok(atoms::not_found().encode(env))
+    } else {
+        // Convert matching IDs to Erlang binaries
+        let mut result_binaries = Vec::with_capacity(matching_ids.len());
+        for id in matching_ids {
+            let mut binary = rustler::types::binary::OwnedBinary::new(id.len())
+                .ok_or(Error::BadArg)?;
+            binary.as_mut_slice().copy_from_slice(&id);
+            result_binaries.push(binary.release(env));
+        }
+        
+        Ok((atoms::ok(), result_binaries).encode(env))
+    }
 }
 
 #[rustler::nif]

@@ -275,15 +275,6 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
 
 #[rustler::nif]
 fn env_sync<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Term<'a>> {
-    // Check if there are still active database references
-    {
-        let ref_count = env_handle.ref_count.lock().unwrap();
-        if *ref_count > 0 {
-            return Ok((atoms::error(), atoms::environment_error(), 
-                      format!("Environment still has {} active database references", *ref_count)).encode(env));
-        }
-    }
-
     // flush buffers to disk with force true
     match env_handle.env.sync(true) {
         Ok(()) => Ok(atoms::ok().encode(env)),

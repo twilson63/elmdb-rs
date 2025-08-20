@@ -120,9 +120,29 @@ Writes are buffered for performance and flushed when:
 
 ## Testing Approach
 
-Tests use EUnit framework with the following structure:
+Tests use EUnit and Common Test frameworks with the following structure:
 - `test/elmdb_test.erl` - Consolidated test suite covering basic operations, batch operations, list operations, pattern matching, error handling, and performance
-- `test/elmdb_benchmark.erl` - Performance benchmarking utilities
+- `test/elmdb_benchmark.erl` - Comprehensive performance benchmarking suite with match feature validation
+
+### Match Feature Benchmarks
+The benchmark suite includes extensive match operation testing:
+
+**Core Benchmarks:**
+- Single pattern matching with different selectivities
+- Multi-pattern scaling (2, 5, 10, 20 patterns)
+- Scalability testing (1K to 100K records)
+- Hierarchical key performance (2-20 depth levels)
+
+**Advanced Scenarios:**
+- Concurrent match operations (1-50 workers)
+- Selectivity impact analysis (0.1% to 80% match rates)
+- Memory usage profiling
+
+**Cursor Optimization Validation:**
+- Optimization effectiveness comparison
+- Prefix detection performance
+- Early termination benefits
+- Validates 50-80% performance improvement targets
 
 Pattern matching tests include:
 - Basic single and multi-pattern matching

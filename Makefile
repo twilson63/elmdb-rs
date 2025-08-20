@@ -12,11 +12,15 @@ compile:
 
 # Run all tests (EUnit)
 test: compile
+	@echo "Cleaning up leftover LMDB lock files..."
+	@rm -rf /tmp/elmdb_test_* 2>/dev/null || true
 	@echo "Running all EUnit tests..."
 	rebar3 eunit
 
 # Run all tests with verbose output
 test-verbose: compile
+	@echo "Cleaning up leftover LMDB lock files..."
+	@rm -rf /tmp/elmdb_test_* 2>/dev/null || true
 	@echo "Running all tests with verbose output..."
 	rebar3 eunit -v
 
@@ -27,6 +31,8 @@ benchmark: compile
 
 # Run tests with coverage
 test-coverage: compile
+	@echo "Cleaning up leftover LMDB lock files..."
+	@rm -rf /tmp/elmdb_test_* 2>/dev/null || true
 	@echo "Running tests with coverage..."
 	rebar3 eunit --cover
 	rebar3 cover --verbose
@@ -75,9 +81,9 @@ help:
 	@echo "Available targets:"
 	@echo "  all           - Compile the project (default)"
 	@echo "  compile       - Compile the project"
-	@echo "  test          - Run all EUnit tests"
-	@echo "  test-verbose  - Run all tests with verbose output"
-	@echo "  test-coverage - Run tests with coverage analysis"
+	@echo "  test          - Run all EUnit tests (with automatic lock file cleanup)"
+	@echo "  test-verbose  - Run all tests with verbose output (with cleanup)"
+	@echo "  test-coverage - Run tests with coverage analysis (with cleanup)"
 	@echo "  benchmark     - Run performance benchmarks"
 	@echo "  examples      - Run example code"
 	@echo "  docs          - Generate documentation"

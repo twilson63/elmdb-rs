@@ -20,6 +20,9 @@
 %% List operations
 -export([list/2]).
 
+%% Pattern matching operations
+-export([match/2]).
+
 
 %% NIF loading
 -export([init/0]).
@@ -180,6 +183,31 @@ get(_DBInstance, _Key) ->
 -spec list(DBInstance :: term(), Key :: binary()) -> 
     {ok, [binary()]} | not_found.
 list(_DBInstance, _Key) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Pattern Matching Operations
+%%%===================================================================
+
+%% @doc Match database entries against a set of key-value patterns
+%% @param DBInstance Database handle
+%% @param Patterns List of {KeySuffix, Value} tuples to match against
+%%        KeySuffix is the part after the last '/' in hierarchical keys
+%%        Value must match exactly for a successful match
+%% @returns {ok, [MatchingIDs]} where MatchingIDs is a list of binary IDs
+%%          not_found if no matches exist
+%%          {error, ErrorType, Description} on error
+%% @example
+%%   Patterns = [{<<"name">>, <<"Alice">>}, {<<"email">>, <<"alice@example.com">>}],
+%%   {ok, IDs} = elmdb:match(DB, Patterns).
+%%   %% Returns IDs where all patterns match, e.g., {ok, [<<"users/alice">>]}
+-spec match(DBInstance :: term(), Patterns :: [{binary(), binary()}]) -> 
+    {ok, [binary()]} | not_found | {error, term(), binary()}.
+match(DBInstance, Patterns) ->
+    match_pattern(DBInstance, Patterns).
+
+%% Internal NIF stub for match_pattern
+match_pattern(_DBInstance, _Patterns) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @doc Explicitly flush any buffered writes to disk

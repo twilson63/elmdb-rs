@@ -21,7 +21,7 @@
 -export([list/2]).
 
 %% Pattern matching operations
--export([match/2, match_pattern/2]).
+-export([match/2]).
 
 
 %% NIF loading

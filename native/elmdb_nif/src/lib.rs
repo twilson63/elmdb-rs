@@ -26,6 +26,7 @@
 
 use rustler::{Env, Term, NifResult, Error, Encoder, ResourceArc};
 use rustler::types::binary::Binary;
+use rustler::types::binary::OwnedBinary;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
@@ -960,9 +961,7 @@ fn match_pattern<'a>(
     
     // Iterate through all key-value pairs in the database
     let iter = cursor.iter_start();
-    for item in iter {
-        let (key_bytes, value_bytes) = item;
-        
+    for (key_bytes, value_bytes) in iter {
         // Parse key to extract ID and suffix
         // Find the position of the last '/' to extract the ID and suffix
         let last_slash_pos = key_bytes.iter().rposition(|&b| b == b'/');
@@ -1018,7 +1017,7 @@ fn match_pattern<'a>(
         // Convert matching IDs to Erlang binaries
         let mut result_binaries = Vec::with_capacity(matching_ids.len());
         for id in matching_ids {
-            let mut binary = rustler::types::binary::OwnedBinary::new(id.len())
+            let mut binary = OwnedBinary::new(id.len())
                 .ok_or(Error::BadArg)?;
             binary.as_mut_slice().copy_from_slice(&id);
             result_binaries.push(binary.release(env));

@@ -72,6 +72,7 @@ load_nif_from_list(PrivDir, [LibName | Rest]) ->
 %% @param Path Directory path for the database files
 %% @param Options Configuration options:
 %%   - {map_size, integer()}: Maximum database size in bytes
+%%   - {max_readers, integer()}: Maximum number of reader slots (default: 126)
 %%   - no_mem_init: Don't initialize malloc'd memory before writing to disk
 %%   - no_sync: Don't flush system buffers to disk when committing
 %%   - write_map: Use a writeable memory map for better performance

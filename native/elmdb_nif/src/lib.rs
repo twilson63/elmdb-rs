@@ -44,6 +44,7 @@ mod atoms {
         nif_not_loaded,
         // LMDB-specific atoms
         map_size,
+        max_readers,
         no_mem_init,
         no_sync,
         write_map,
@@ -200,7 +201,12 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
         // Default to 1GB if no map size is specified
         env_builder.set_map_size(1024 * 1024 * 1024);
     }
-    
+
+    // Set max readers if provided
+    if let Some(max_readers) = parsed_options.max_readers {
+        env_builder.set_max_readers(max_readers);
+    }
+
     // Set flags based on options
     let mut flags = EnvironmentFlags::empty();
     if parsed_options.no_mem_init {
@@ -1061,6 +1067,11 @@ fn parse_env_options(options: Vec<Term>) -> NifResult<EnvOptions> {
                         env_opts.map_size = Some(size);
                     }
                 }
+                "max_readers" => {
+                    if let Ok(readers) = value.decode::<u32>() {
+                        env_opts.max_readers = Some(readers);
+                    }
+                }
                 _ => {} // Ignore unknown options for now
             }
         } else if let Ok(atom) = option.decode::<rustler::Atom>() {
@@ -1100,6 +1111,7 @@ fn parse_db_options(options: Vec<Term>) -> NifResult<DbOptions> {
 #[derive(Default)]
 struct EnvOptions {
     map_size: Option<u64>,
+    max_readers: Option<u32>,
     no_mem_init: bool,
     no_sync: bool,
     write_map: bool,

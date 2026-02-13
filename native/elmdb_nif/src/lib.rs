@@ -240,13 +240,14 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
                             lmdb::Error::Corrupted => atoms::corrupted(),
                             lmdb::Error::VersionMismatch => atoms::version_mismatch(),
                             lmdb::Error::MapFull => atoms::map_full(),
-                            _ => atoms::environment_error()
+                            lmdb::Error::Other(24) => return Ok((atoms::error(), (atoms::environment_error(), "Too many open files".to_string())).encode(env)),
+                            other => return Ok((atoms::error(), (atoms::environment_error(), format!("{:?}", other))).encode(env)),
                         }
                     },
                     Err(io_err) => {
                         match io_err.kind() {
                             std::io::ErrorKind::PermissionDenied => atoms::permission_denied(),
-                            _ => atoms::environment_error()
+                            other => return Ok((atoms::error(), (atoms::environment_error(), format!("{:?}", other))).encode(env)),
                         }
                     }
                 }

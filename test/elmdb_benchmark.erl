@@ -17,7 +17,8 @@
     bench_100k_writes_batch/1,
     bench_100k_reads/1,
     bench_hierarchical_keys/1,
-    bench_concurrent_access/1
+    bench_concurrent_access/1,
+    bench_iterator_fold/1
 ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -32,7 +33,8 @@ all() ->
         bench_100k_writes_batch,
         bench_100k_reads,
         bench_hierarchical_keys,
-        bench_concurrent_access
+        bench_concurrent_access,
+        bench_iterator_fold
     ].
 
 init_per_suite(Config) ->
@@ -372,6 +374,51 @@ bench_concurrent_access(Config) ->
     ct:print("  Records/second: ~.2f", [RecordsPerSecond]),
     ct:print("  Processes: ~p", [ProcessCount]).
 
+%% @doc Benchmark iterator cursor stepping and fold traversal
+bench_iterator_fold(Config) ->
+    DB = ?config(db, Config),
+    RecordCount = 100000,
+
+    ct:print("Preparing iterator/fold benchmark data: ~p records", [RecordCount]),
+    {ok, RecordCount, []} = write_records(DB, RecordCount),
+    ok = elmdb:flush(DB),
+
+    ct:print("Starting iterator cursor benchmark"),
+    IteratorStart = erlang:monotonic_time(microsecond),
+    {ok, IteratedCount} = count_with_iterator(DB),
+    IteratorEnd = erlang:monotonic_time(microsecond),
+    IteratorMicros = IteratorEnd - IteratorStart,
+    IteratorRate = RecordCount / (IteratorMicros / 1000000),
+
+    ct:print("Iterator results:"),
+    ct:print("  Records iterated: ~p", [IteratedCount]),
+    ct:print("  Total time: ~.2f seconds", [IteratorMicros / 1000000]),
+    ct:print("  Records/second: ~.2f", [IteratorRate]),
+    ct:print("  Microseconds per record: ~.2f", [IteratorMicros / RecordCount]),
+
+    case IteratedCount of
+        RecordCount -> ok;
+        _ -> ct:fail("Iterator count mismatch: expected ~p got ~p", [RecordCount, IteratedCount])
+    end,
+
+    ct:print("Starting fold benchmark"),
+    FoldStart = erlang:monotonic_time(microsecond),
+    {ok, FoldCount} = elmdb:fold(DB, fun(_Key, _Value, Acc) -> Acc + 1 end, 0),
+    FoldEnd = erlang:monotonic_time(microsecond),
+    FoldMicros = FoldEnd - FoldStart,
+    FoldRate = RecordCount / (FoldMicros / 1000000),
+
+    ct:print("Fold results:"),
+    ct:print("  Records folded: ~p", [FoldCount]),
+    ct:print("  Total time: ~.2f seconds", [FoldMicros / 1000000]),
+    ct:print("  Records/second: ~.2f", [FoldRate]),
+    ct:print("  Microseconds per record: ~.2f", [FoldMicros / RecordCount]),
+
+    case FoldCount of
+        RecordCount -> ok;
+        _ -> ct:fail("Fold count mismatch: expected ~p got ~p", [RecordCount, FoldCount])
+    end.
+
 %%%===================================================================
 %%% Helper Functions
 %%%===================================================================
@@ -491,4 +538,23 @@ write_batches(DB, [Batch | Rest], SuccessCount, Errors) ->
             write_batches(DB, Rest, SuccessCount, [{batch_error, Reason} | Errors]);
         Error ->
             write_batches(DB, Rest, SuccessCount, [{batch_error, Error} | Errors])
+    end.
+
+%% @doc Count records by iterating with iterator/1 + iterator_next/2.
+count_with_iterator(DB) ->
+    case elmdb:iterator(DB) of
+        {error, _, _} = Error ->
+            Error;
+        Cursor ->
+            count_with_iterator(DB, Cursor, 0)
+    end.
+
+count_with_iterator(DB, Cursor, Count) ->
+    case elmdb:iterator_next(DB, Cursor) of
+        {ok, _Key, _Value, NextCursor} ->
+            count_with_iterator(DB, NextCursor, Count + 1);
+        undefined ->
+            {ok, Count};
+        {error, _, _} = Error ->
+            Error
     end.

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: OTP ${{ matrix.otp }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      # rebar3 pinned per OTP: 3.24 requires OTP 25+, 3.22 is the last line
+      # supporting OTP 24.
+      matrix:
+        include:
+          - otp: '24.3'
+            rebar3: '3.22.1'
+          - otp: '25'
+            rebar3: '3.23.0'
+          - otp: '26'
+            rebar3: '3.24.0'
+          - otp: '27'
+            rebar3: '3.24.0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: ${{ matrix.rebar3 }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/elmdb_nif
+
+      - name: Rust lint (clippy)
+        run: cargo clippy --release --manifest-path native/elmdb_nif/Cargo.toml
+
+      - name: EUnit tests
+        run: rebar3 eunit

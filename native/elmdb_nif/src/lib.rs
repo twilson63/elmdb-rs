@@ -36,13 +36,12 @@ use std::thread::{self, JoinHandle};
 use arc_swap::ArcSwap;
 use std::path::Path;
 use scc::HashMap as SccHashMap;
-use lmdb::{Environment, EnvironmentFlags, Database, DatabaseFlags, Transaction, WriteFlags, Cursor};
+use std::ops::Bound;
+use heed::types::Bytes;
+use heed::{Env as HeedEnv, EnvFlags, EnvOpenOptions, MdbError};
 
-// LMDB cursor operation constants (instead of importing lmdb-sys only for constants from lmdb_sys::ffi).
-// To be improved in the future.
-const MDB_FIRST: u32 = 0;
-const MDB_NEXT: u32 = 8;
-const MDB_SET_RANGE: u32 = 17;
+type Db = heed::Database<Bytes, Bytes>;
+
 // Default LMDB max key size. This is controlled by LMDB's compile-time MDB_MAXKEYSIZE.
 // If the Rust lmdb crate exposes mdb_env_get_maxkeysize safely in the future, prefer that.
 const LMDB_DEFAULT_MAX_KEY_SIZE: usize = 511;
@@ -109,7 +108,7 @@ enum IteratorCursor {
 }
 
 struct DbState {
-    cached_db: Option<(Database, u64)>,
+    cached_db: Option<(Db, u64)>,
     create_if_missing: bool,
     closed: bool,
 }
@@ -165,8 +164,8 @@ pub struct LmdbDatabase {
     state: Mutex<DbState>,
     /// Fatal flush error set by worker thread
     fatal_error: Mutex<Option<String>>,
-    /// Lock-free read fast path: cached (Arc<Environment>, Database, generation)
-    hot_handles: ArcSwap<Option<(Arc<Environment>, Database, u64)>>,
+    /// Lock-free read fast path: cached (Arc<Env>, Db, generation)
+    hot_handles: ArcSwap<Option<(Arc<HeedEnv>, Db, u64)>>,
     /// Channel to send commands to the worker thread
     worker_tx: Mutex<Option<Sender<WorkerCommand>>>,
     /// Handle to the worker thread for joining
@@ -175,7 +174,7 @@ pub struct LmdbDatabase {
 
 #[derive(Debug)]
 struct EnvState {
-    env: Option<Arc<Environment>>,
+    env: Option<Arc<HeedEnv>>,
     close_requested: bool,
     generation: u64,
 }
@@ -203,38 +202,45 @@ fn new_overlay_map() -> OverlayMap {
     SccHashMap::with_hasher(ahash::RandomState::default())
 }
 
-fn build_environment(path: &str, options: &EnvOptions) -> Result<Environment, lmdb::Error> {
-    let mut env_builder = Environment::new();
+fn build_environment(path: &str, options: &EnvOptions) -> Result<HeedEnv, heed::Error> {
+    let mut env_builder = EnvOpenOptions::new();
 
     if let Some(map_size) = options.map_size {
-        env_builder.set_map_size(map_size as usize);
+        env_builder.map_size(map_size as usize);
     } else {
-        env_builder.set_map_size(1024 * 1024 * 1024);
+        env_builder.map_size(1024 * 1024 * 1024);
     }
 
     if let Some(max_readers) = options.max_readers {
-        env_builder.set_max_readers(max_readers);
+        env_builder.max_readers(max_readers);
     }
 
-    let mut flags = EnvironmentFlags::empty();
+    let mut flags = EnvFlags::empty();
     if options.no_mem_init {
-        flags |= EnvironmentFlags::NO_MEM_INIT;
+        flags |= EnvFlags::NO_MEM_INIT;
     }
     if options.no_sync {
-        flags |= EnvironmentFlags::NO_SYNC;
+        flags |= EnvFlags::NO_SYNC;
     }
     if options.no_lock {
-        flags |= EnvironmentFlags::NO_LOCK;
+        flags |= EnvFlags::NO_LOCK;
     }
     if options.write_map {
-        flags |= EnvironmentFlags::WRITE_MAP;
+        flags |= EnvFlags::WRITE_MAP;
     }
     if options.no_readahead {
-        flags |= EnvironmentFlags::NO_READAHEAD;
+        flags |= EnvFlags::NO_READ_AHEAD;
     }
-    env_builder.set_flags(flags);
 
-    env_builder.open(Path::new(path))
+    // SAFETY: these are the same LMDB flag semantics the previous lmdb-crate
+    // build exposed; the caller opts into the durability tradeoffs explicitly.
+    // Opening is unsafe in heed because closing an environment while handles
+    // remain is UB; the global ENVIRONMENTS registry plus the Arc strong-count
+    // checks in LmdbEnv guarantee single ownership per path.
+    unsafe {
+        env_builder.flags(flags);
+        env_builder.open(Path::new(path))
+    }
 }
 
 impl LmdbEnv {
@@ -255,7 +261,7 @@ impl LmdbEnv {
         Ok(options.batch_size.unwrap_or(1000))
     }
 
-    fn ensure_open(&self) -> Result<(Arc<Environment>, u64), String> {
+    fn ensure_open(&self) -> Result<(Arc<HeedEnv>, u64), String> {
         {
             let state = self
                 .state
@@ -353,7 +359,7 @@ fn do_flush(db: &LmdbDatabase) -> Result<(), String> {
         }
     };
 
-    let mut txn = match live_env.begin_rw_txn() {
+    let mut txn = match live_env.write_txn() {
         Ok(txn) => txn,
         Err(_) => {
             restore_failed_flush(db, old_map);
@@ -363,7 +369,7 @@ fn do_flush(db: &LmdbDatabase) -> Result<(), String> {
 
     let mut write_err = None;
     (*old_map).iter_sync(|k, v| {
-        if let Err(e) = txn.put(live_db, k, v, WriteFlags::empty()) {
+        if let Err(e) = live_db.put(&mut txn, k, v) {
             write_err = Some(format!("Failed to put value: {:?}", e));
             return false;
         }
@@ -644,7 +650,7 @@ fn env_open<'a>(env: Env<'a>, path: Term<'a>, options: Vec<Term<'a>>) -> NifResu
                 match std::fs::File::create(path.join(".lmdb_test")) {
                     Ok(_) => {
                         let _ = std::fs::remove_file(path.join(".lmdb_test"));
-                        lmdb_error_to_atom(e)
+                        heed_error_to_atom(&e)
                     }
                     Err(io_err) => match io_err.kind() {
                         std::io::ErrorKind::PermissionDenied => atoms::permission_denied(),
@@ -687,7 +693,7 @@ fn env_sync<'a>(env: Env<'a>, env_handle: ResourceArc<LmdbEnv>) -> NifResult<Ter
         }
     };
 
-    match live_env.sync(true) {
+    match live_env.force_sync() {
         Ok(()) => Ok(atoms::ok().encode(env)),
         Err(err_msg) => Ok(
             (atoms::error(), atoms::environment_error(), format!("Environment sync failed: {}", err_msg))
@@ -917,7 +923,7 @@ impl LmdbDatabase {
         Ok(())
     }
 
-    fn ensure_open_handles(&self) -> Result<(Arc<Environment>, Database), String> {
+    fn ensure_open_handles(&self) -> Result<(Arc<HeedEnv>, Db), String> {
         let (live_env, env_generation) = self.env.ensure_open()?;
         self.reopen_if_closed()?;
 
@@ -932,15 +938,32 @@ impl LmdbDatabase {
             }
         }
 
+        // The unnamed (main) database always exists in an LMDB environment,
+        // so open and create converge; create_database also covers the case
+        // where a write txn is needed for first access under create semantics.
         let db = if state.create_if_missing {
-            live_env.create_db(None, DatabaseFlags::empty())
+            live_env
+                .write_txn()
+                .map_err(|e| format!("Failed to begin write transaction: {:?}", e))
+                .and_then(|mut wtxn| {
+                    let db = live_env
+                        .create_database::<Bytes, Bytes>(&mut wtxn, None)
+                        .map_err(|e| format!("Failed to open database: {:?}", e))?;
+                    wtxn.commit()
+                        .map_err(|e| format!("Failed to commit transaction: {:?}", e))?;
+                    Ok(db)
+                })
         } else {
-            match live_env.create_db(None, DatabaseFlags::empty()) {
-                Ok(db) => Ok(db),
-                Err(_) => live_env.open_db(None),
-            }
-        }
-        .map_err(|e| format!("Failed to open database: {:?}", e))?;
+            live_env
+                .read_txn()
+                .map_err(|e| format!("Failed to begin read transaction: {:?}", e))
+                .and_then(|rtxn| {
+                    live_env
+                        .open_database::<Bytes, Bytes>(&rtxn, None)
+                        .map_err(|e| format!("Failed to open database: {:?}", e))?
+                        .ok_or_else(|| "Failed to open database: not found".to_string())
+                })
+        }?;
 
         state.cached_db = Some((db, env_generation));
 
@@ -951,7 +974,7 @@ impl LmdbDatabase {
         Ok((live_env, db))
     }
 
-    fn fast_get_handles(&self) -> Result<(Arc<Environment>, Database), String> {
+    fn fast_get_handles(&self) -> Result<(Arc<HeedEnv>, Db), String> {
         if !self.is_closed.load(Ordering::Relaxed) {
             let current_gen = self.env.generation.load(Ordering::Acquire);
             let guard = self.hot_handles.load();
@@ -1037,7 +1060,7 @@ fn put<'a>(
                 );
             }
         };
-        let mut txn = match live_env.begin_rw_txn() {
+        let mut txn = match live_env.write_txn() {
             Ok(txn) => txn,
             Err(_) => {
                 return Ok((
@@ -1048,7 +1071,7 @@ fn put<'a>(
                     .encode(env));
             }
         };
-        match txn.put(live_db, &key_vec, &value_vec, WriteFlags::empty()) {
+        match live_db.put(&mut txn, &key_vec, &value_vec) {
             Ok(()) => match txn.commit() {
                 Ok(()) => return Ok(atoms::ok().encode(env)),
                 Err(_) => {
@@ -1062,7 +1085,9 @@ fn put<'a>(
             },
             Err(lmdb_err) => {
                 let error_msg = match lmdb_err {
-                    lmdb::Error::BadValSize => "Empty key not supported".to_string(),
+                    heed::Error::Mdb(MdbError::BadValSize) => {
+                        "Empty key not supported".to_string()
+                    }
                     _ => format!("Failed to put value: {:?}", lmdb_err),
                 };
                 return Ok(
@@ -1144,7 +1169,7 @@ fn get<'a>(
         }
     };
 
-    let txn = match live_env.begin_ro_txn() {
+    let txn = match live_env.read_txn() {
         Ok(txn) => txn,
         Err(_) => {
             return Ok((
@@ -1156,13 +1181,13 @@ fn get<'a>(
         }
     };
 
-    match txn.get(live_db, &key_bytes) {
-        Ok(value_bytes) => {
-            let mut binary = OwnedBinary::new(value_bytes.len()).unwrap();
+    match live_db.get(&txn, key_bytes) {
+        Ok(Some(value_bytes)) => {
+            let mut binary = OwnedBinary::new(value_bytes.len()).ok_or(Error::BadArg)?;
             binary.as_mut_slice().copy_from_slice(value_bytes);
             Ok((atoms::ok(), binary.release(env)).encode(env))
         }
-        Err(lmdb::Error::NotFound) => Ok(atoms::not_found().encode(env)),
+        Ok(None) => Ok(atoms::not_found().encode(env)),
         Err(_) => Ok(
             (atoms::error(), atoms::database_error(), "Failed to get value".to_string())
                 .encode(env),
@@ -1291,7 +1316,7 @@ fn iterator_next<'a>(
         }
     };
 
-    let txn = match live_env.begin_ro_txn() {
+    let txn = match live_env.read_txn() {
         Ok(txn) => txn,
         Err(_) => {
             return Ok((
@@ -1303,69 +1328,29 @@ fn iterator_next<'a>(
         }
     };
 
-    let cursor = match txn.open_ro_cursor(live_db) {
-        Ok(cursor) => cursor,
+    // `{iterator, LastKey}` means "resume strictly after LastKey", which maps
+    // directly onto an exclusive lower range bound.
+    let entry_result = match cursor_token {
+        IteratorCursor::Start => live_db.first(&txn),
+        IteratorCursor::AfterKey(last_key) => {
+            let range = (Bound::Excluded(last_key.as_slice()), Bound::Unbounded);
+            match live_db.range(&txn, &range) {
+                Ok(mut iter) => iter.next().transpose(),
+                Err(e) => Err(e),
+            }
+        }
+    };
+
+    let next_entry = match entry_result {
+        Ok(Some((key, value))) => Some((key.to_vec(), value.to_vec())),
+        Ok(None) => None,
         Err(_) => {
             return Ok((
                 atoms::error(),
                 atoms::database_error(),
-                "Failed to open cursor".to_string(),
+                "Failed to advance iterator cursor".to_string(),
             )
                 .encode(env));
-        }
-    };
-
-    let next_entry = match cursor_token {
-        IteratorCursor::Start => match cursor.get(None, None, MDB_FIRST) {
-            Ok((Some(key), value)) => Some((key.to_vec(), value.to_vec())),
-            Ok((None, _)) => None,
-            Err(lmdb::Error::NotFound) => None,
-            Err(_) => {
-                return Ok((
-                    atoms::error(),
-                    atoms::database_error(),
-                    "Failed to read first cursor entry".to_string(),
-                )
-                    .encode(env));
-            }
-        },
-        IteratorCursor::AfterKey(last_key) => {
-            let positioned_entry =
-                match cursor.get(Some(last_key.as_slice()), None, MDB_SET_RANGE) {
-                    Ok((Some(key), value)) => Some((key.to_vec(), value.to_vec())),
-                    Ok((None, _)) => None,
-                    Err(lmdb::Error::NotFound) => None,
-                    Err(_) => {
-                        return Ok((
-                            atoms::error(),
-                            atoms::database_error(),
-                            "Failed to position iterator cursor".to_string(),
-                        )
-                            .encode(env));
-                    }
-                };
-
-            match positioned_entry {
-                Some((key, _value)) if key == last_key => {
-                    match cursor.get(None, None, MDB_NEXT) {
-                        Ok((Some(next_key), next_value)) => {
-                            Some((next_key.to_vec(), next_value.to_vec()))
-                        }
-                        Ok((None, _)) => None,
-                        Err(lmdb::Error::NotFound) => None,
-                        Err(_) => {
-                            return Ok((
-                                atoms::error(),
-                                atoms::database_error(),
-                                "Failed to advance iterator cursor".to_string(),
-                            )
-                                .encode(env));
-                        }
-                    }
-                }
-                Some((key, value)) => Some((key, value)),
-                None => None,
-            }
         }
     };
 
@@ -1397,6 +1382,12 @@ fn list<'a>(
 
     let prefix_bytes = key_prefix.as_slice();
 
+    // LMDB cannot seek to a zero-size key; the pre-heed implementation
+    // surfaced that as not_found, which is part of the list/2 contract.
+    if prefix_bytes.is_empty() {
+        return Ok(atoms::not_found().encode(env));
+    }
+
     let active_empty = db_handle.active.load().is_empty();
     let draining_empty = db_handle.draining.load().is_none();
     if !active_empty || !draining_empty {
@@ -1412,7 +1403,7 @@ fn list<'a>(
         }
     };
 
-    let txn = match live_env.begin_ro_txn() {
+    let txn = match live_env.read_txn() {
         Ok(txn) => txn,
         Err(_) => {
             return Ok((
@@ -1424,8 +1415,8 @@ fn list<'a>(
         }
     };
 
-    let mut cursor = match txn.open_ro_cursor(live_db) {
-        Ok(cursor) => cursor,
+    let prefix_iter = match live_db.prefix_iter(&txn, prefix_bytes) {
+        Ok(iter) => iter,
         Err(_) => {
             return Ok((
                 atoms::error(),
@@ -1439,18 +1430,18 @@ fn list<'a>(
     let mut children = Vec::with_capacity(64);
     let prefix_len = prefix_bytes.len();
 
-    let cursor_positioned = cursor.get(Some(prefix_bytes), None, MDB_SET_RANGE).is_ok();
-
-    if !cursor_positioned {
-        return Ok(atoms::not_found().encode(env));
-    }
-
-    let cursor_iter = cursor.iter_from(prefix_bytes);
-
-    for (key, _value) in cursor_iter {
-        if !key.starts_with(prefix_bytes) {
-            break;
-        }
+    for entry in prefix_iter {
+        let (key, _value) = match entry {
+            Ok(kv) => kv,
+            Err(_) => {
+                return Ok((
+                    atoms::error(),
+                    atoms::database_error(),
+                    "Failed to read cursor entry".to_string(),
+                )
+                    .encode(env));
+            }
+        };
 
         let remaining = &key[prefix_len..];
 
@@ -1540,7 +1531,7 @@ fn match_pattern<'a>(
         }
     };
 
-    let txn = match live_env.begin_ro_txn() {
+    let txn = match live_env.read_txn() {
         Ok(txn) => txn,
         Err(_) => {
             return Ok((
@@ -1552,8 +1543,8 @@ fn match_pattern<'a>(
         }
     };
 
-    let mut cursor = match txn.open_ro_cursor(live_db) {
-        Ok(cursor) => cursor,
+    let iter = match live_db.iter(&txn) {
+        Ok(iter) => iter,
         Err(_) => {
             return Ok((
                 atoms::error(),
@@ -1570,8 +1561,18 @@ fn match_pattern<'a>(
     let mut seen_patterns: HashSet<usize> = HashSet::new();
     let total_patterns = patterns_vec.len();
 
-    let iter = cursor.iter_start();
-    for (key_bytes, value_bytes) in iter {
+    for entry in iter {
+        let (key_bytes, value_bytes) = match entry {
+            Ok(kv) => kv,
+            Err(_) => {
+                return Ok((
+                    atoms::error(),
+                    atoms::database_error(),
+                    "Failed to read cursor entry".to_string(),
+                )
+                    .encode(env));
+            }
+        };
         let last_slash_pos = key_bytes.iter().rposition(|&b| b == b'/');
 
         let (id, suffix) = if let Some(pos) = last_slash_pos {
@@ -1670,30 +1671,41 @@ fn decode_iterator_cursor(cursor_term: Term) -> Result<IteratorCursor, String> {
     Err("Invalid iterator cursor payload".to_string())
 }
 
-fn lmdb_error_to_atom(error: lmdb::Error) -> rustler::Atom {
+fn heed_error_to_atom(error: &heed::Error) -> rustler::Atom {
     match error {
-        lmdb::Error::KeyExist => atoms::key_exist(),
-        lmdb::Error::NotFound => atoms::not_found(),
-        lmdb::Error::PageNotFound => atoms::page_not_found(),
-        lmdb::Error::Corrupted => atoms::corrupted(),
-        lmdb::Error::Panic => atoms::panic(),
-        lmdb::Error::VersionMismatch => atoms::version_mismatch(),
-        lmdb::Error::Invalid => atoms::invalid(),
-        lmdb::Error::MapFull => atoms::map_full(),
-        lmdb::Error::DbsFull => atoms::dbs_full(),
-        lmdb::Error::ReadersFull => atoms::readers_full(),
-        lmdb::Error::TlsFull => atoms::tls_full(),
-        lmdb::Error::TxnFull => atoms::txn_full(),
-        lmdb::Error::CursorFull => atoms::cursor_full(),
-        lmdb::Error::PageFull => atoms::page_full(),
-        lmdb::Error::MapResized => atoms::map_resized(),
-        lmdb::Error::Incompatible => atoms::incompatible(),
-        lmdb::Error::BadRslot => atoms::bad_rslot(),
-        lmdb::Error::BadTxn => atoms::bad_txn(),
-        lmdb::Error::BadValSize => atoms::bad_val_size(),
-        lmdb::Error::BadDbi => atoms::bad_dbi(),
-        lmdb::Error::Other(28) => atoms::no_space(),
-        lmdb::Error::Other(_) => atoms::io_error(),
+        heed::Error::Mdb(mdb_error) => match mdb_error {
+            MdbError::KeyExist => atoms::key_exist(),
+            MdbError::NotFound => atoms::not_found(),
+            MdbError::PageNotFound => atoms::page_not_found(),
+            MdbError::Corrupted => atoms::corrupted(),
+            MdbError::Panic => atoms::panic(),
+            MdbError::VersionMismatch => atoms::version_mismatch(),
+            MdbError::Invalid => atoms::invalid(),
+            MdbError::MapFull => atoms::map_full(),
+            MdbError::DbsFull => atoms::dbs_full(),
+            MdbError::ReadersFull => atoms::readers_full(),
+            MdbError::TlsFull => atoms::tls_full(),
+            MdbError::TxnFull => atoms::txn_full(),
+            MdbError::CursorFull => atoms::cursor_full(),
+            MdbError::PageFull => atoms::page_full(),
+            MdbError::MapResized => atoms::map_resized(),
+            MdbError::Incompatible => atoms::incompatible(),
+            MdbError::BadRslot => atoms::bad_rslot(),
+            MdbError::BadTxn => atoms::bad_txn(),
+            MdbError::BadValSize => atoms::bad_val_size(),
+            MdbError::BadDbi => atoms::bad_dbi(),
+            MdbError::Other(28) => atoms::no_space(),
+            MdbError::Other(_) => atoms::io_error(),
+            _ => atoms::environment_error(),
+        },
+        heed::Error::Io(io_error) => match io_error.raw_os_error() {
+            Some(28) => atoms::no_space(),
+            _ => atoms::io_error(),
+        },
+        // heed enforces one open environment per canonical path; this cannot
+        // introduce a new Erlang-visible atom, so it folds into the generic
+        // environment error like every other non-MDB failure.
+        _ => atoms::environment_error(),
     }
 }
 

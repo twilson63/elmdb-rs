@@ -80,8 +80,8 @@ name = "elmdb_nif"
 crate-type = ["cdylib"]
 
 [dependencies]
-rustler = "0.29"
-lmdb = "0.8"
+rustler = "0.37"
+heed = "0.22"
 lazy_static = "1.4"
 ```
 

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Progress: lmdb → heed migration</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; }
+  .done { background: #e6f4e6; }
+  pre { background: #f6f6f6; padding: 10px; border-radius: 4px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Progress: lmdb 0.8 → heed 0.22 migration</h1>
+<p>PRD: <a href="lmdb-dependency-migration-prd.html">lmdb-dependency-migration-prd.html</a> · Branch: <code>migrate-heed</code></p>
+
+<h2>Checkpoints</h2>
+<ul>
+  <li>task/begin — 2026-08-01, research complete (RUSTSEC-2022-0001; heed 0.22.1 chosen)</li>
+  <li>task/plan-approved — plan gate passed, no blockers; reviewer notes folded in:
+      Ok(None)→not_found mapping, EnvAlreadyOpened→environment_error (no new atom),
+      on-disk fixture must include old lock.mdb</li>
+  <li>task/step-6-done — all implementation steps complete, validation green</li>
+  <li>task/complete — judge gate passed after one repair: list(Db, &lt;&lt;&gt;&gt;) empty-prefix regression fixed (early not_found, matching pre-migration contract) + eunit assertion added; suite re-run green</li>
+</ul>
+
+<h2>Steps</h2>
+<table>
+  <tr><th>Step</th><th>Status</th><th>Evidence / notes</th></tr>
+  <tr class="done"><td>1. Branch + dependency swap</td><td>done</td>
+      <td>cargo tree: heed 0.22.1 / lmdb-master-sys 0.2.6 / bitflags 2.13; lmdb-sys 0.8 and bitflags 1.x gone. Cargo.lock un-ignored and committed.</td></tr>
+  <tr class="done"><td>2. Environment layer</td><td>done</td>
+      <td>EnvOpenOptions with map_size/max_readers; all five flags preserved (NO_MEM_INIT, NO_SYNC, NO_LOCK, WRITE_MAP, NO_READ_AHEAD); env.sync(true)→force_sync(); strong-count close/reopen logic untouched. SAFETY comment documents the unsafe flags/open contract.</td></tr>
+  <tr class="done"><td>3. DB handle + txn ops</td><td>done</td>
+      <td>create_database (write txn) under create_if_missing, open_database (read txn) otherwise — unnamed DB always exists. do_flush, empty-key put path ("Empty key not supported" preserved via MdbError::BadValSize), get maps Ok(None)→not_found. Removed the one .unwrap() in get.</td></tr>
+  <tr class="done"><td>4. Scans</td><td>done</td>
+      <td>list→prefix_iter; iterator_next→db.first / range(Excluded(last_key)..); match_pattern→db.iter. grep MDB_FIRST/MDB_NEXT/MDB_SET_RANGE/lmdb:: → no matches.</td></tr>
+  <tr class="done"><td>5. Error mapping</td><td>done</td>
+      <td>heed_error_to_atom: all 20 MdbError variants map to identical atoms; Other(28)→no_space kept; Io(ENOSPC)→no_space; EnvAlreadyOpened and other non-MDB errors→environment_error (no new Erlang-visible atom).</td></tr>
+  <tr class="done"><td>6. On-disk compatibility</td><td>done</td>
+      <td>Fixture (data.mdb + lock.mdb) written by old build (vendored ~2014 LMDB), reopened by heed build: 503 entries fold-counted, gets/list/match verified, cross-build write+read OK.</td></tr>
+  <tr class="done"><td>7. Validation + docs</td><td>done</td>
+      <td>cargo clippy --release: 2 warnings, identical to pre-migration baseline (rustler resource! macro). rebar3 eunit: <strong>All 82 tests passed.</strong> CLAUDE.md + docs/NIF_BUILD.md dependency lines updated (incl. stale rustler 0.36.2 → 0.37).</td></tr>
+</table>
+
+<h2>Validation log</h2>
+<pre>
+$ cargo tree | grep -i 'lmdb|heed|bitflags'
+heed v0.22.1 / heed-traits 0.20.0 / heed-types 0.21.0 / lmdb-master-sys v0.2.6 / bitflags v2.13.1
+
+$ cargo clippy --release
+warning: `elmdb_nif` (lib) generated 2 warnings   # same 2 as baseline (rustler resource! macro)
+
+$ rebar3 eunit
+All 82 tests passed.
+
+$ erl on-disk fixture check
+on-disk compat OK, fold count: 503 (500 bulk + 3 user keys)
+</pre>
+
+<h2>Behavior notes (intentional, reviewed)</h2>
+<ul>
+  <li>heed enforces one open Env per <em>canonicalized</em> path. The registry keys on the raw
+      path string, so two spellings of one directory (e.g. /tmp vs /private/tmp on macOS) now fail
+      with {error, environment_error, …} instead of silently opening a second env — safer, and
+      LMDB explicitly documents double-open as corruption-prone.</li>
+  <li>Bundled LMDB moves from ~0.9.14-era (2014) to current mdb.master — same 0.9 on-disk format
+      (verified empirically), with a decade of upstream fixes.</li>
+</ul>
+</body>
+</html>

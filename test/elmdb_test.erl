@@ -164,7 +164,10 @@ list_operations_test_() ->
                      ?assertEqual(lists:sort([<<"name">>, <<"email">>]), lists:sort(AliceAttrs)),
                      
                      % List non-existent prefix
-                     ?assertEqual(not_found, elmdb:list(DB, <<"nonexistent/">>))
+                     ?assertEqual(not_found, elmdb:list(DB, <<"nonexistent/">>)),
+
+                     % Empty prefix is not seekable in LMDB; contract is not_found
+                     ?assertEqual(not_found, elmdb:list(DB, <<>>))
                  end),
           
           % Skip empty database test due to lmdb-rs panic issue

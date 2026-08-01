@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRD: Migrate elmdb-rs from lmdb 0.8 to heed 0.22</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; }
+  code, pre { background: #f6f6f6; border-radius: 4px; }
+  pre { padding: 10px; overflow-x: auto; }
+  code { padding: 1px 4px; }
+  h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+</style>
+</head>
+<body>
+<h1>Migrate elmdb-rs from <code>lmdb 0.8</code> to <code>heed 0.22</code></h1>
+
+<p><strong>Definition:</strong> In this project, the "LMDB dependency" is the Rust crate that
+<code>native/elmdb_nif/src/lib.rs</code> uses for every storage operation: environment lifecycle
+(builder, flags, sync), the single unnamed database handle cached in <code>DbState</code> /
+<code>hot_handles</code>, read/write transactions (used by <code>get</code>, the empty-key
+<code>put</code> path, the background flush worker), cursor scans (<code>list</code>,
+<code>iterator_next</code>, <code>match_pattern</code>), and the <code>lmdb::Error</code> →
+Erlang atom table. A successful migration replaces this crate while keeping the Erlang-visible
+API (<code>src/elmdb.erl</code>) and error-atom semantics byte-for-byte identical.</p>
+
+<p><strong>Non-goals:</strong> No engine change (MDBX/sled/redb are out — different on-disk formats).
+No behavioral changes to the overlay/flush design, no new API functions (e.g. delete), no fix for the
+pre-existing <code>put/3</code> key-size validation gap (tracked separately), no changes to
+<code>src/elmdb.erl</code> or the test suite semantics.</p>
+
+<h2>Why (evidence)</h2>
+<ul>
+  <li><code>lmdb 0.8.0</code>: last release 2016; RustSec advisory
+      <a href="https://rustsec.org/advisories/RUSTSEC-2022-0001.html">RUSTSEC-2022-0001</a>
+      declares it unmaintained; vendors a ~2014 LMDB and bitflags 1.x.</li>
+  <li><code>lmdb-rkv 0.14.0</code> (the advisory's suggestion): Mozilla archived it; sys crate stale 4+ years.</li>
+  <li><code>heed 0.22.1</code> (Meilisearch): actively maintained, production-proven, tracks LMDB
+      <code>mdb.master</code>, keeps the LMDB 0.9 on-disk format so existing databases stay readable.</li>
+</ul>
+
+<h2>Constraints</h2>
+<ul>
+  <li>On-disk compatibility: databases written by the old crate must open unchanged (both are LMDB 0.9 format).</li>
+  <li>Error atoms returned to Erlang must not change (tests assert on them; downstream code matches on them).</li>
+  <li>Threading model unchanged: read txns on scheduler/dirty threads, write txns on the flush worker and NIF threads; txns never cross threads.</li>
+  <li>heed 0.20+ enforces one open <code>Env</code> per canonical path (<code>EnvAlreadyOpened</code>).
+      Our global <code>ENVIRONMENTS</code> registry already guarantees this, but the close/reopen path in
+      <code>LmdbEnv::ensure_open</code> must fully drop the old <code>Env</code> (strong_count check) before rebuilding.</li>
+  <li>Never clone the inner <code>heed::Env</code>; only clone the wrapping <code>Arc&lt;Env&gt;</code> so the
+      existing strong-count close logic keeps working.</li>
+</ul>
+
+<h2>API mapping</h2>
+<table>
+  <tr><th>lmdb 0.8</th><th>heed 0.22</th></tr>
+  <tr><td>Environment::new().set_map_size/.set_max_readers/.set_flags(...).open(path)</td>
+      <td>EnvOpenOptions::new().map_size/.max_readers + unsafe .flags(EnvFlags::…) + unsafe .open(path)</td></tr>
+  <tr><td>env.sync(true)</td><td>env.force_sync()</td></tr>
+  <tr><td>env.begin_rw_txn() / begin_ro_txn()</td><td>env.write_txn() / env.read_txn()</td></tr>
+  <tr><td>env.create_db(None, empty) / open_db(None)</td><td>env.open_database::&lt;Bytes,Bytes&gt;(&amp;rtxn, None) (unnamed DB always exists)</td></tr>
+  <tr><td>txn.put(db, k, v, WriteFlags::empty()) / txn.get / txn.commit</td><td>db.put(&amp;mut wtxn, k, v) / db.get(&amp;rtxn, k) / wtxn.commit()</td></tr>
+  <tr><td>cursor MDB_FIRST + iterate (match_pattern)</td><td>db.iter(&amp;rtxn)</td></tr>
+  <tr><td>cursor MDB_SET_RANGE + prefix loop (list)</td><td>db.prefix_iter(&amp;rtxn, prefix) (or range from Included(prefix))</td></tr>
+  <tr><td>cursor MDB_SET_RANGE + skip-if-equal + MDB_NEXT (iterator_next)</td><td>db.range(&amp;rtxn, &amp;(Bound::Excluded(last_key), Bound::Unbounded)).next()</td></tr>
+  <tr><td>lmdb::Error::{KeyExist,…,Other(n)}</td><td>heed::Error::Mdb(MdbError::{KeyExist,…,Other(n)}); non-Mdb heed errors map to environment_error/io_error</td></tr>
+</table>
+
+<h2>Plan</h2>
+<table>
+  <tr><th>Step</th><th>Acceptance criteria</th><th>Evidence</th></tr>
+  <tr><td>1. Branch <code>migrate-heed</code>; swap Cargo.toml dep to heed 0.22; commit Cargo.lock</td>
+      <td>cargo tree shows heed/lmdb-master-sys; no lmdb-sys 0.8, no bitflags 1.x</td>
+      <td>cargo tree output in progress log</td></tr>
+  <tr><td>2. Port environment layer (build_environment, EnvState, sync, close/reopen)</td>
+      <td>Compiles; flags NO_SYNC/NO_LOCK/WRITE_MAP/NO_READ_AHEAD/NO_MEM_INIT preserved; strong-count close logic intact</td>
+      <td>cargo check output</td></tr>
+  <tr><td>3. Port database handle + txn ops (put/get/flush worker/put_batch empty-key path)</td>
+      <td>Compiles; empty-key put still returns transaction_error "Empty key not supported"</td>
+      <td>cargo check; eunit error_handling tests</td></tr>
+  <tr><td>4. Port scans: list, iterator_next, match_pattern; delete raw MDB_* constants</td>
+      <td>No raw cursor constants remain; identical result ordering (LMDB key order)</td>
+      <td>grep MDB_ returns nothing; list/iterator/match eunit groups pass</td></tr>
+  <tr><td>5. Port error mapping table; keep Other(28)→no_space</td>
+      <td>Every old atom still reachable; no atom renamed</td>
+      <td>code diff review of lmdb_error_to_atom successor</td></tr>
+  <tr><td>6. On-disk compatibility check</td>
+      <td>A database directory written by the pre-migration build opens and reads correctly post-migration</td>
+      <td>manual escript/eunit run logged in progress HTML</td></tr>
+  <tr><td>7. Full validation + docs</td>
+      <td>cargo clippy --release: no new warnings; rebar3 eunit: all 82 pass; CLAUDE.md/README dependency lines updated</td>
+      <td>command output in progress log</td></tr>
+</table>
+
+<h2>Validation</h2>
+<pre><code>cd native/elmdb_nif &amp;&amp; cargo clippy --release
+cd ../.. &amp;&amp; rebar3 eunit</code></pre>
+
+<h2>Judge rubric</h2>
+<p>Correctness (all 82 tests pass, error atoms unchanged, on-disk compat proven); security
+(no new unsafe beyond the two required heed calls, flags semantics preserved); simplicity
+(heed's iterators should shrink cursor code, not grow it); maintainability (no dead constants,
+idiomatic heed use); no scope creep beyond the dependency swap.</p>
+
+<h2>Definition of done</h2>
+<ul>
+  <li>lmdb 0.8 fully removed from the dependency tree; heed 0.22.x in place; Cargo.lock committed.</li>
+  <li>cargo clippy --release introduces no new warnings vs baseline (rustler macro warnings pre-exist).</li>
+  <li>rebar3 eunit: all 82 tests pass.</li>
+  <li>Pre-migration database directory verified readable post-migration.</li>
+  <li>Docs updated (CLAUDE.md, README dependency mentions).</li>
+  <li>Work isolated on branch <code>migrate-heed</code>; single commit; not pushed.</li>
+</ul>
+</body>
+</html>

@@ -68,7 +68,7 @@ The project follows a two-layer architecture:
 - Uses Arc/Mutex for thread-safe access
 - Implements write buffering for batch optimization (default 1000 operations)
 - Handles all memory management through Rust's ownership system
-- Uses rustler 0.36.2 for Erlang interop
+- Uses rustler 0.37 for Erlang interop
 
 ### 2. Erlang Interface (`src/elmdb.erl`)
 - Provides idiomatic Erlang API
@@ -174,6 +174,6 @@ ls -la priv/  # Should show elmdb_nif.so or equivalent
 ### Rust
 - Requires Rust 1.70+ with Cargo
 - Key dependencies:
-  - rustler 0.36.2 (Erlang NIF bindings)
-  - lmdb 0.8 (LMDB Rust bindings)
+  - rustler 0.37 (Erlang NIF bindings)
+  - heed 0.22 (LMDB Rust bindings, maintained by Meilisearch; replaced the unmaintained lmdb 0.8 — see RUSTSEC-2022-0001)
   - lazy_static 1.4 (Global state management)

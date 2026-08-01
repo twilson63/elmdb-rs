@@ -24,7 +24,6 @@ priv/lib/
 
 # Rust build artifacts
 target/
-Cargo.lock
 **/*.rs.bk
 
 # Native code compilation artifacts
